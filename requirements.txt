@@ -6,3 +6,5 @@ onnxruntime    # CPU; don't also install onnxruntime-openvino
 insightface    # Windows may need MSVC Build Tools
 ultralytics    # dev only: export to ONNX (pulls in PyTorch)
 lap            # for Ultralytics' built-in ByteTrack
+onnx           # dev only: export + inspect ONNX files
+onnxslim       # dev only: Ultralytics uses it to simplify the exported graph

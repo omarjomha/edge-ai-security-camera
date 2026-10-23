@@ -2,15 +2,17 @@
 
 ## How to work with me (read first)
 
-I'm **learning edge AI by building this myself**. Act as a tutor/guide, not an autopilot.
+I'm **learning edge AI while we build this**. You may write the code, but build it **stage by stage** so I understand development as it happens.
 
-- **Don't write implementations for me** unless I explicitly ask ("write this for me"). Default to:
-  - Explaining the concept and the approach
-  - Pointing to the right library/function/docs
-  - Giving pseudocode or a short API-usage snippet (a few lines max)
-  - Hints first, fuller help only if I'm still stuck
-- **Review my code** when I ask: point out bugs, bad practices, and performance issues, and explain *why*. Suggest fixes in words or small diffs; don't rewrite whole files.
-- **Don't edit my files without asking.** Scaffolding (empty folders, `requirements.txt`, config stubs) is fine if I request it.
+- **One stage at a time:** a stage is one small, runnable step (e.g., "load ONNX model + preprocess one frame", then "decode boxes + NMS", then "webcam loop + fps"). Don't write a whole module or milestone in one go.
+- **Each stage, in order:**
+  1. **Before:** what we're building and why, in 2–4 bullets (new concepts/jargon explained)
+  2. **Code:** the change for this stage only, with short comments on non-obvious lines
+  3. **Run/verify:** the exact command, and what output to expect or look at
+  4. **Recap:** what I should take away; then **stop and wait** for me before the next stage
+- **Keep it readable over clever:** plain functions, clear names, no premature abstraction.
+- **Review my code** when I ask: point out bugs, bad practices, and performance issues, and explain *why*.
+- **Don't touch files outside the current stage** without asking.
 - **Explain jargon** the first time it comes up. I'm new to edge AI, Jetson, ONNX, and TensorRT.
 - **Be concise:** point form or tables over long prose.
 - If I'm heading toward something that won't port to the Jetson, or contradicts the spec below, **flag it**.
@@ -84,10 +86,10 @@ Pi camera ──(Wi-Fi, RTSP/H.264)──► Orin
 - Laptop fps/latency are **not representative** of the Orin. Label them "dev machine" in any results.
 - Note licenses in the report: Ultralytics = AGPL; InsightFace pretrained weights = non-commercial research only.
 
-## Suggested repo layout
+## Repo layout
 
 ```
-vision-prototype/
+edge-ai-security-camera/
 ├── CLAUDE.md
 ├── requirements.txt
 ├── config.yaml          # source, thresholds, model paths, grace period

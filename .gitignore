@@ -1,0 +1,14 @@
+# Personal data (faces) and model weights: never commit
+data/
+gallery/
+models/
+*.pt
+*.onnx
+*.engine
+
+# Python
+__pycache__/
+.venv/
+
+# Ultralytics output
+runs/

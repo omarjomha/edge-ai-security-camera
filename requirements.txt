@@ -1,0 +1,8 @@
+# Python 3.10 or 3.11
+numpy
+opencv-python
+pyyaml
+onnxruntime    # CPU; don't also install onnxruntime-openvino
+insightface    # Windows may need MSVC Build Tools
+ultralytics    # dev only: export to ONNX (pulls in PyTorch)
+lap            # for Ultralytics' built-in ByteTrack

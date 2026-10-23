@@ -1,0 +1,6 @@
+source: 0                        # webcam index | video path | rtsp:// URL
+detector_model: models/yolo11n.onnx
+detector_conf: 0.5
+min_face_px: 40                  # skip faces too small to trust
+similarity_threshold: 0.40       # placeholder: set from threshold sweep
+grace_period_s: 5.0              # no friend match within this → INTRUDER

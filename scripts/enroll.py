@@ -13,6 +13,7 @@ import yaml
 from src.enrollment import enroll_person
 from src.face import FaceDetector, FaceEmbedder
 from src.gallery import save_gallery
+from src.runtime import configure
 
 ENROLL_DIR = "data/enroll"   # gitignored: one subfolder of photos per friend
 IMAGE_EXTS = (".jpg", ".jpeg", ".png")
@@ -25,6 +26,7 @@ def main() -> None:
     with open(args.config) as f:
         cfg = yaml.safe_load(f)
 
+    configure(cfg)   # same backend as the live pipeline, so embeddings are computed the same way
     face_det = FaceDetector(cfg["face_det_model"], conf=cfg["face_conf"])  # 640 px: full photos
     embedder = FaceEmbedder(cfg["face_embed_model"])
 

@@ -15,6 +15,7 @@ from src.detector import Detector
 from src.face import FaceDetector, FaceEmbedder
 from src.gallery import load_gallery
 from src.main import draw_frame, process_frame
+from src.runtime import configure
 from src.state_machine import StateMachine
 from src.tracker import Tracker
 
@@ -31,6 +32,7 @@ def main() -> None:
     with open(args.config) as f:
         cfg = yaml.safe_load(f)
 
+    configure(cfg)
     detector = Detector(cfg["detector_model"], conf=cfg["detector_conf"])
     face_det = FaceDetector(cfg["face_det_model"], conf=cfg["face_conf"],
                             input_size=cfg["face_det_size"])

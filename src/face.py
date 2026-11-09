@@ -16,7 +16,7 @@ class FaceDetector:
 
     def __init__(self, model_path: str, conf: float = 0.5, input_size: int = 640,
                  nms_iou: float = 0.4):
-        self.session = make_session(model_path)
+        self.session = make_session(model_path, cache_tag=f"_{input_size}")
         self.input_name = self.session.get_inputs()[0].name
         # 9 outputs: scores for strides 8/16/32, then box distances x3, then landmarks x3
         self.output_names = [o.name for o in self.session.get_outputs()]

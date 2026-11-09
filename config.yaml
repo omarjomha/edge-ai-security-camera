@@ -2,6 +2,9 @@ source: 0                        # webcam index | video path | rtsp:// URL | GSt
 rtsp_transport: tcp                      # tcp: clean frames over Wi-Fi; udp: lower delay, smeared losses
 stream_timeout_s: 5                      # give up on a silent stream after this, then reconnect
 reconnect_delay_s: 2                     # wait between reconnect attempts
+backend: cpu                             # cpu (laptop) | cuda | tensorrt (Orin GPU)
+trt_fp16: true                           # tensorrt only: half precision (faster)
+trt_cache_dir: models/trt_cache          # tensorrt only: built engines (per model + size)
 detector_model: models/yolo11n.onnx
 detector_conf: 0.1                       # low on purpose: the tracker also uses weak boxes
 track_high_conf: 0.5                     # confident person box (also the cut-off for faces)

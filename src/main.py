@@ -11,6 +11,7 @@ from src.detector import Detector, draw
 from src.face import FaceDetector, FaceEmbedder, align_face, detect_in_persons
 from src.gallery import load_gallery, match
 from src.state_machine import FRIEND, INTRUDER, StateMachine
+from src.runtime import backend_label, configure, describe
 from src.tracker import PERSON, Track, Tracker, assign_faces
 
 # Label colours (BGR)
@@ -157,6 +158,9 @@ def main() -> None:
         cfg = yaml.safe_load(f)
     source = args.source if args.source is not None else cfg["source"]
 
+    configure(cfg)                          # pick cpu / cuda / tensorrt before loading models
+    if cfg.get("backend") == "tensorrt":
+        print("tensorrt: the first run builds engines (can take minutes); later runs load the cache")
     detector = Detector(cfg["detector_model"], conf=cfg["detector_conf"])
     face_det = FaceDetector(cfg["face_det_model"], conf=cfg["face_conf"],
                             input_size=cfg["face_det_size"])
@@ -167,6 +171,8 @@ def main() -> None:
     tracker = Tracker(cfg["track_high_conf"], cfg["track_new_conf"], cfg["track_match_iou"],
                       cfg["track_max_misses"], cfg["track_min_hits"], cfg["vote_window"])
     sm = StateMachine(cfg["grace_period_s"], cfg["vote_min_matches"])
+    print(f"backend {backend_label()} | YOLO {describe(detector.session)} | "
+          f"SCRFD {describe(face_det.session)} | ArcFace {describe(embedder.session)}")
     print(f"gallery: {sorted(gallery)} | threshold {cfg['similarity_threshold']} | "
           f"grace {cfg['grace_period_s']} s")
     source = parse_source(source)

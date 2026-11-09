@@ -120,7 +120,7 @@ edge-ai-security-camera/
 
 1. [x] Env setup; YOLO person/pet detection on webcam; export to ONNX; run via ONNX Runtime; log fps
 2. [ ] Enrollment script (10–20 photos per groupmate, with consent) → gallery. Core logic runs on-device (`src/enrollment.py`); the API/app side is a later phase (see `docs/enrollment_design.md`)
-3. [ ] Live friend/unknown recognition on webcam
+3. [x] Live friend/unknown recognition on webcam
 4. [ ] Integrate detector → tracker → face → match → state machine; configurable input source (simulate RTSP)
 5. [ ] Record test clips (friend, stranger, back turned, low light, pet if possible); compute precision/recall; sweep similarity threshold
 6. [ ] (If Orin borrowed) Build TensorRT FP16 engines and benchmark on the Orin; otherwise document the deploy plan

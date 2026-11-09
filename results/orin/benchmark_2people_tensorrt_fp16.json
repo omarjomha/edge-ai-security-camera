@@ -1,0 +1,54 @@
+{
+  "device": "NVIDIA Jetson Orin Nano Engineering Reference Developer Kit Super",
+  "backend": "tensorrt fp16",
+  "machine": "aarch64",
+  "source": "synthetic_E_friend_and_stranger.mp4",
+  "frame_size": [
+    720,
+    1240
+  ],
+  "frames_measured": 100,
+  "warmup_frames": 20,
+  "avg_people_per_frame": 2.0,
+  "model_load_s": 0.2,
+  "latency_ms": {
+    "read": {
+      "mean": 2.7,
+      "p50": 2.69,
+      "p95": 2.76,
+      "max": 2.94
+    },
+    "detect": {
+      "mean": 16.1,
+      "p50": 16.13,
+      "p95": 16.69,
+      "max": 16.91
+    },
+    "face": {
+      "mean": 10.83,
+      "p50": 10.85,
+      "p95": 11.21,
+      "max": 13.49
+    },
+    "recog": {
+      "mean": 5.1,
+      "p50": 5.03,
+      "p95": 5.32,
+      "max": 7.55
+    },
+    "other": {
+      "mean": 0.56,
+      "p50": 0.56,
+      "p95": 0.6,
+      "max": 0.65
+    },
+    "total": {
+      "mean": 32.59,
+      "p50": 32.5,
+      "p95": 33.44,
+      "max": 38.31
+    }
+  },
+  "processing_fps": 30.7,
+  "achieved_fps": 28.3
+}

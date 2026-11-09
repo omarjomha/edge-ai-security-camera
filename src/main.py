@@ -6,6 +6,7 @@ import cv2
 import yaml
 
 from src.detector import Detector, draw
+from src.face import FaceDetector, detect_in_persons, draw_faces
 
 
 def open_source(source) -> cv2.VideoCapture:
@@ -30,9 +31,11 @@ def main() -> None:
     source = args.source if args.source is not None else cfg["source"]
 
     detector = Detector(cfg["detector_model"], conf=cfg["detector_conf"])
+    face_det = FaceDetector(cfg["face_det_model"], conf=cfg["face_conf"],
+                            input_size=cfg["face_det_size"])
     cap = open_source(source)
 
-    frames, detect_total = 0, 0.0
+    frames, detect_total, face_total = 0, 0.0, 0.0
     fps = 0.0
     start = time.perf_counter()
     while True:
@@ -45,15 +48,21 @@ def main() -> None:
         dets = detector.detect(frame)
         detect_ms = (time.perf_counter() - t0) * 1000
 
+        t0 = time.perf_counter()
+        face_boxes, face_landmarks = detect_in_persons(face_det, frame, dets)
+        face_ms = (time.perf_counter() - t0) * 1000  # grows with the number of people
+
         frames += 1
         detect_total += detect_ms
+        face_total += face_ms
         # Smoothed fps (moving average) so the number on screen doesn't flicker
         loop_fps = 1.0 / (time.perf_counter() - loop_start)
         fps = loop_fps if frames == 1 else 0.9 * fps + 0.1 * loop_fps
 
         if not args.no_show:
-            vis = draw(frame, dets)
-            cv2.putText(vis, f"{fps:.1f} fps | detect {detect_ms:.0f} ms (dev machine)", (10, 25),
+            vis = draw_faces(draw(frame, dets), face_boxes, face_landmarks)
+            cv2.putText(vis, f"{fps:.1f} fps | detect {detect_ms:.0f} ms | face {face_ms:.0f} ms "
+                        f"(dev machine)", (10, 25),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 255), 2)
             cv2.imshow("detector", vis)
             if cv2.waitKey(1) & 0xFF == ord("q"):  # waitKey also lets the window redraw
@@ -65,7 +74,7 @@ def main() -> None:
     if frames:
         elapsed = time.perf_counter() - start
         print(f"[dev machine] {frames} frames | avg detect {detect_total / frames:.1f} ms | "
-              f"avg loop {frames / elapsed:.1f} fps")
+              f"avg face {face_total / frames:.1f} ms | avg loop {frames / elapsed:.1f} fps")
 
 
 if __name__ == "__main__":

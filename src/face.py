@@ -28,6 +28,48 @@ class FaceDetector:
         return boxes, landmarks
 
 
+def detect_in_persons(face_det: FaceDetector, frame: np.ndarray, dets: np.ndarray,
+                      margin: float = 0.1, iou_threshold: float = 0.4
+                      ) -> tuple[np.ndarray, np.ndarray]:
+    """Run the face detector on each YOLO person box only (not the whole frame).
+
+    dets: (N, 6) from Detector.detect -> x1, y1, x2, y2, score, class_id
+    Returns (boxes, landmarks) like FaceDetector.detect, but in full-frame pixels.
+    """
+    frame_h, frame_w = frame.shape[:2]
+    all_boxes, all_landmarks = [], []
+    for x1, y1, x2, y2, _, cls in dets:
+        if int(cls) != 0:                       # COCO class 0 = person; skip cats/dogs
+            continue
+        # Grow the box a little so a tight box doesn't cut off the top of the head
+        mx, my = (x2 - x1) * margin, (y2 - y1) * margin
+        cx1, cy1 = int(max(x1 - mx, 0)), int(max(y1 - my, 0))
+        cx2, cy2 = int(min(x2 + mx, frame_w)), int(min(y2 + my, frame_h))
+        crop = frame[cy1:cy2, cx1:cx2]          # numpy slice: a view, no copy
+        if crop.size == 0:
+            continue
+
+        boxes, landmarks = face_det.detect(crop)
+        # Crop pixels -> frame pixels: shift by the crop's top-left corner
+        boxes = boxes.copy()
+        boxes[:, [0, 2]] += cx1
+        boxes[:, [1, 3]] += cy1
+        landmarks = landmarks + np.array([cx1, cy1], dtype=np.float32)
+        all_boxes.append(boxes)
+        all_landmarks.append(landmarks)
+
+    if not all_boxes:
+        return np.zeros((0, 5), dtype=np.float32), np.zeros((0, 5, 2), dtype=np.float32)
+    boxes, landmarks = np.concatenate(all_boxes), np.concatenate(all_landmarks)
+
+    # Overlapping person boxes (people side by side) mean one face can be found in
+    # several crops -> NMS again across all crops to keep one box per face
+    xywh = np.column_stack([boxes[:, :2], boxes[:, 2:4] - boxes[:, :2]])
+    idx = cv2.dnn.NMSBoxes(xywh.tolist(), boxes[:, 4].tolist(), 0.0, iou_threshold)
+    idx = np.asarray(idx, dtype=int).flatten()
+    return boxes[idx], landmarks[idx]
+
+
 def draw_faces(img: np.ndarray, boxes: np.ndarray, landmarks: np.ndarray) -> np.ndarray:
     out = img.copy()
     for (x1, y1, x2, y2, score), pts in zip(boxes, landmarks):

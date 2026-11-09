@@ -1,5 +1,6 @@
 """Face detection + embedding wrappers (SCRFD/YuNet + ArcFace/SFace)."""
 import argparse
+import os
 
 import cv2
 import numpy as np
@@ -70,6 +71,28 @@ def detect_in_persons(face_det: FaceDetector, frame: np.ndarray, dets: np.ndarra
     return boxes[idx], landmarks[idx]
 
 
+# Where ArcFace expects the 5 landmarks to be in its 112x112 input
+# (left eye, right eye, nose, left mouth, right mouth). Standard insightface values.
+ARCFACE_TEMPLATE = np.array([[38.2946, 51.6963],
+                             [73.5318, 51.5014],
+                             [56.0252, 71.7366],
+                             [41.5493, 92.3655],
+                             [70.7299, 92.2041]], dtype=np.float32)
+ALIGNED_SIZE = 112
+
+
+def align_face(img: np.ndarray, landmarks: np.ndarray) -> np.ndarray:
+    """Rotate/scale/shift one face so its 5 landmarks land on ARCFACE_TEMPLATE.
+
+    landmarks: (5, 2) for this face, in img pixels. Returns a 112x112 BGR image.
+    """
+    # "Partial" affine = similarity transform: rotation + uniform scale + shift, no shear,
+    # so the face isn't distorted. Least-squares fit over all 5 point pairs.
+    matrix, _ = cv2.estimateAffinePartial2D(landmarks.astype(np.float32), ARCFACE_TEMPLATE,
+                                            method=cv2.LMEDS)  # robust to one bad landmark
+    return cv2.warpAffine(img, matrix, (ALIGNED_SIZE, ALIGNED_SIZE), borderValue=0)
+
+
 def draw_faces(img: np.ndarray, boxes: np.ndarray, landmarks: np.ndarray) -> np.ndarray:
     out = img.copy()
     for (x1, y1, x2, y2, score), pts in zip(boxes, landmarks):
@@ -87,6 +110,8 @@ if __name__ == "__main__":
     parser.add_argument("image")
     parser.add_argument("--model", default="models/scrfd_500m.onnx")
     parser.add_argument("--save", default="results/faces.jpg")
+    # Aligned crops are real faces -> default into data/ (gitignored), not results/
+    parser.add_argument("--aligned-dir", default="data/aligned")
     args = parser.parse_args()
 
     img = cv2.imread(args.image)
@@ -99,3 +124,13 @@ if __name__ == "__main__":
 
     cv2.imwrite(args.save, draw_faces(img, boxes, landmarks))
     print(f"saved: {args.save}")
+
+    if len(landmarks):
+        aligned = [align_face(img, pts) for pts in landmarks]
+        os.makedirs(args.aligned_dir, exist_ok=True)
+        for i, face in enumerate(aligned):
+            cv2.imwrite(os.path.join(args.aligned_dir, f"face_{i}.jpg"), face)
+        # All aligned faces side by side: eyes should line up across the whole strip
+        strip_path = os.path.join(args.aligned_dir, "strip.jpg")
+        cv2.imwrite(strip_path, np.hstack(aligned))
+        print(f"saved {len(aligned)} aligned faces ({ALIGNED_SIZE}x{ALIGNED_SIZE}) + {strip_path}")

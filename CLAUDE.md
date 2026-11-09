@@ -112,18 +112,21 @@ edge-ai-security-camera/
 │   ├── face_check.py    # dev: faces + aligned crops on one image, or similarity table
 │   ├── export_onnx.py
 │   └── evaluate.py      # precision/recall, threshold sweep, latency
+├── docs/                # design notes (e.g. enrollment_design.md)
 └── results/             # metrics, plots, screenshots for the report
 ```
 
 ## Milestones (week of Oct 23–30)
 
-1. [ ] Env setup; YOLO person/pet detection on webcam; export to ONNX; run via ONNX Runtime; log fps
-2. [ ] Enrollment script (10–20 photos per groupmate, with consent) → gallery
+1. [x] Env setup; YOLO person/pet detection on webcam; export to ONNX; run via ONNX Runtime; log fps
+2. [ ] Enrollment script (10–20 photos per groupmate, with consent) → gallery. Core logic runs on-device (`src/enrollment.py`); the API/app side is a later phase (see `docs/enrollment_design.md`)
 3. [ ] Live friend/unknown recognition on webcam
 4. [ ] Integrate detector → tracker → face → match → state machine; configurable input source (simulate RTSP)
 5. [ ] Record test clips (friend, stranger, back turned, low light, pet if possible); compute precision/recall; sweep similarity threshold
 6. [ ] (If Orin borrowed) Build TensorRT FP16 engines and benchmark on the Orin; otherwise document the deploy plan
-7. [ ] Report: architecture diagram, model comparison table, demo screenshots, metrics, risks, next steps
+7. [ ] Report: architecture diagram, model comparison table, demo screenshots, metrics, risks, next steps (include the production enrollment design from `docs/enrollment_design.md`)
+
+**Later phase (after the live pipeline):** enrollment API + routing on the Orin, phone-app upload, pairing/auth, gallery hot-reload. Don't build these until the pipeline milestones are done.
 
 ## Known risks to keep in mind
 

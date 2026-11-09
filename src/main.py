@@ -10,10 +10,11 @@ import yaml
 from src.detector import Detector, draw
 from src.face import FaceDetector, FaceEmbedder, align_face, detect_in_persons
 from src.gallery import load_gallery, match
+from src.state_machine import FRIEND, INTRUDER, StateMachine
 from src.tracker import PERSON, Track, Tracker, assign_faces
 
 # Label colours (BGR)
-GREEN, RED, GREY, WHITE = (0, 200, 0), (0, 0, 255), (160, 160, 160), (255, 255, 255)
+GREEN, RED, GREY, YELLOW = (0, 200, 0), (0, 0, 255), (160, 160, 160), (0, 220, 255)
 
 
 def track_boxes(tracks: list[Track]) -> np.ndarray:
@@ -38,7 +39,7 @@ def identify_faces(embedder: FaceEmbedder, frame: np.ndarray, boxes: np.ndarray,
 
 def process_frame(frame: np.ndarray, detector: Detector, face_det: FaceDetector,
                   embedder: FaceEmbedder, gallery: dict[str, np.ndarray],
-                  tracker: Tracker, cfg: dict) -> dict:
+                  tracker: Tracker, sm: StateMachine, now: float, cfg: dict) -> dict:
     """One frame through the whole pipeline. Returns everything needed to draw/log it."""
     times = {}
     t0 = time.perf_counter()
@@ -62,21 +63,27 @@ def process_frame(frame: np.ndarray, detector: Detector, face_det: FaceDetector,
         if score is not None:           # too-small faces are not evidence either way
             tracks[ti].add_vote(name)
 
+    # All tracker tracks, including briefly lost ones: someone hiding keeps their timer
+    events = sm.update(tracker.tracks, now)
+
     strong = dets[dets[:, 4] >= cfg["track_high_conf"]]
     pets = strong[strong[:, 5] != PERSON]
     return {"tracks": tracks, "face_boxes": face_boxes, "face_results": face_results,
-            "pets": pets, "times": times}
+            "pets": pets, "events": events, "times": times}
 
 
-def draw_frame(frame: np.ndarray, out: dict, min_matches: int) -> np.ndarray:
-    """Pets (raw boxes), people (track decision), faces (this frame's raw result)."""
+def draw_frame(frame: np.ndarray, out: dict, sm: StateMachine, now: float) -> np.ndarray:
+    """Pets (raw boxes), people (state), faces (this frame's raw result), alarm banner."""
     img = draw(frame, out["pets"])
     for t in out["tracks"]:
-        name, count = t.identity(min_matches)
-        if name is not None:
-            label, colour = f"#{t.track_id} FRIEND {name} ({count}/{len(t.votes)})", GREEN
-        else:
-            label, colour = f"#{t.track_id} verifying ({len(t.votes)} faces)", WHITE
+        p = sm.people[t.track_id]
+        if p.state == FRIEND:
+            label, colour = f"#{t.track_id} FRIEND {p.friend}", GREEN
+        elif p.state == INTRUDER:
+            label, colour = f"#{t.track_id} INTRUDER", RED
+        else:                           # VERIFYING: show the grace-period countdown
+            left = max(sm.grace_period_s - (now - p.since), 0)
+            label, colour = f"#{t.track_id} verifying {left:.1f}s", YELLOW
         x1, y1, x2, y2 = t.box.astype(int)
         cv2.rectangle(img, (x1, y1), (x2, y2), colour, 2)
         cv2.putText(img, label, (x1, max(y1 - 10, 30)), cv2.FONT_HERSHEY_SIMPLEX, 0.9, colour, 2)
@@ -87,17 +94,21 @@ def draw_frame(frame: np.ndarray, out: dict, min_matches: int) -> np.ndarray:
             label, colour = (f"{name} {score:.2f}", GREEN) if name else (f"? {score:.2f}", RED)
         cv2.rectangle(img, (int(x1), int(y1)), (int(x2), int(y2)), colour, 2)
         cv2.putText(img, label, (int(x1), int(y2) + 25), cv2.FONT_HERSHEY_SIMPLEX, 0.7, colour, 2)
+    if sm.alarm:
+        cv2.rectangle(img, (0, img.shape[0] - 50), (img.shape[1], img.shape[0]), RED, -1)
+        cv2.putText(img, "ALARM: INTRUDER", (15, img.shape[0] - 15),
+                    cv2.FONT_HERSHEY_SIMPLEX, 1.1, (255, 255, 255), 3)
     return img
 
 
-def open_source(source) -> cv2.VideoCapture:
-    """Webcam index (int or "0"), video file path, or rtsp:// URL -> VideoCapture."""
+def open_source(source) -> tuple[cv2.VideoCapture, bool]:
+    """Webcam index (int or "0"), video file path, or rtsp:// URL -> (capture, is_file)."""
     if isinstance(source, str) and source.isdigit():
         source = int(source)                # "0" from the command line means webcam 0
     cap = cv2.VideoCapture(source)
     if not cap.isOpened():
         raise RuntimeError(f"Could not open video source: {source!r}")
-    return cap
+    return cap, isinstance(source, str) and os.path.isfile(source)
 
 
 def main() -> None:
@@ -120,8 +131,10 @@ def main() -> None:
     gallery = load_gallery(cfg["gallery_path"])   # loaded once; no hot-reload yet
     tracker = Tracker(cfg["track_high_conf"], cfg["track_new_conf"], cfg["track_match_iou"],
                       cfg["track_max_misses"], cfg["track_min_hits"], cfg["vote_window"])
-    print(f"gallery: {sorted(gallery)} | threshold {cfg['similarity_threshold']}")
-    cap = open_source(source)
+    sm = StateMachine(cfg["grace_period_s"], cfg["vote_min_matches"])
+    print(f"gallery: {sorted(gallery)} | threshold {cfg['similarity_threshold']} | "
+          f"grace {cfg['grace_period_s']} s")
+    cap, is_file = open_source(source)
 
     frames, detect_total, face_total, recog_total = 0, 0.0, 0.0, 0.0
     fps = 0.0
@@ -132,7 +145,13 @@ def main() -> None:
         if not ok:                          # end of video file, or stream dropped
             break
 
-        out = process_frame(frame, detector, face_det, embedder, gallery, tracker, cfg)
+        # Video files: use the video's own clock (files can run faster than real time).
+        # Live sources: wall clock.
+        now = (cap.get(cv2.CAP_PROP_POS_MSEC) / 1000 if is_file
+               else time.perf_counter() - start)
+        out = process_frame(frame, detector, face_det, embedder, gallery, tracker, sm, now, cfg)
+        for event in out["events"]:
+            print(f"[{now:6.1f}s] {event}")
         detect_ms, face_ms, recog_ms = (out["times"][k] for k in ("detect", "face", "recog"))
 
         frames += 1
@@ -144,7 +163,7 @@ def main() -> None:
         fps = loop_fps if frames == 1 else 0.9 * fps + 0.1 * loop_fps
 
         if not args.no_show:
-            vis = draw_frame(frame, out, cfg["vote_min_matches"])
+            vis = draw_frame(frame, out, sm, now)
             cv2.putText(vis, f"{fps:.1f} fps | detect {detect_ms:.0f} | face {face_ms:.0f} | "
                         f"recog {recog_ms:.0f} ms (dev machine)", (10, 25),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 255), 2)

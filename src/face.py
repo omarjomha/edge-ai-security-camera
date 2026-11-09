@@ -16,7 +16,8 @@ class FaceDetector:
 
     def __init__(self, model_path: str, conf: float = 0.5, input_size: int = 640,
                  nms_iou: float = 0.4):
-        self.session = make_session(model_path, cache_tag=f"_{input_size}")
+        self.session = make_session(model_path, cache_tag=f"_{input_size}",
+                                    input_shape=(1, 3, input_size, input_size))
         self.input_name = self.session.get_inputs()[0].name
         # 9 outputs: scores for strides 8/16/32, then box distances x3, then landmarks x3
         self.output_names = [o.name for o in self.session.get_outputs()]
@@ -152,7 +153,7 @@ class FaceEmbedder:
     src/detector.py, so the backend can be swapped for TensorRT on the Orin."""
 
     def __init__(self, model_path: str):
-        self.session = make_session(model_path)
+        self.session = make_session(model_path, input_shape=(1, 3, ALIGNED_SIZE, ALIGNED_SIZE))
         self.input_name = self.session.get_inputs()[0].name  # "input.1"
 
     def embed(self, aligned_bgr: np.ndarray) -> np.ndarray:

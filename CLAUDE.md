@@ -34,7 +34,7 @@ I'm **learning edge AI while we build this**. You may write the code, but build 
 | Accuracy (G1) | ≥95% precision, ≥90% recall for human presence (day/night, pet present, moving/standing) |
 | False alarms (G2) | ≤1 false alert per 24 h |
 | Edge (G3) | All inference on-device. Local alarm right away; phone notification may take ~30–60 s (client relaxed the original 1.5 s goal) |
-| Privacy (G4) | Camera runs 24/7, but only save clips on verified events. Pre-event buffer allowed (e.g., up to a 5 min window) |
+| Privacy (G4) | Only save clips on verified events. Pre-event buffer allowed (e.g., up to a 5 min window). **Update (Nov 9):** the camera will likely be **sensor-triggered** (PIR / window-break via the sensing hub), not streaming 24/7. Implications for later: keep models loaded and idle (no cold start per trigger); little or no pre-event video |
 | Model | Any model/framework allowed |
 | Camera | Raspberry Pi camera is fine ("couple megapixels") |
 
@@ -123,10 +123,10 @@ edge-ai-security-camera/
 3. [x] Live friend/unknown recognition on webcam
 4. [ ] Integrate detector → tracker → face → match → state machine; configurable input source (simulate RTSP)
 5. [ ] Record test clips (friend, stranger, back turned, low light, pet if possible); compute precision/recall; sweep similarity threshold
-6. [ ] (If Orin borrowed) Build TensorRT FP16 engines and benchmark on the Orin; otherwise document the deploy plan
+6. [ ] (If Orin borrowed) Build TensorRT FP16 engines and benchmark on the Orin; otherwise document the deploy plan. **Current focus:** test the AI stack only (runs, speed, FP16 accuracy) on **video files** copied to the Orin; no streaming/camera/hub work yet
 7. [ ] Report: architecture diagram, model comparison table, demo screenshots, metrics, risks, next steps (include the production enrollment design from `docs/enrollment_design.md`)
 
-**Later phase (after the live pipeline):** enrollment API + routing on the Orin, phone-app upload, pairing/auth, gallery hot-reload. Don't build these until the pipeline milestones are done.
+**Later phase (after the live pipeline):** enrollment API + routing on the Orin, phone-app upload, pairing/auth, gallery hot-reload, sensing hub ↔ Orin communication, sensor-triggered capture, live RTSP/GStreamer camera input. Don't build these until the pipeline milestones are done.
 
 ## Known risks to keep in mind
 

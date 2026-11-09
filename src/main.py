@@ -101,20 +101,55 @@ def draw_frame(frame: np.ndarray, out: dict, sm: StateMachine, now: float) -> np
     return img
 
 
-def open_source(source) -> tuple[cv2.VideoCapture, bool]:
-    """Webcam index (int or "0"), video file path, or rtsp:// URL -> (capture, is_file)."""
-    if isinstance(source, str) and source.isdigit():
-        source = int(source)                # "0" from the command line means webcam 0
-    cap = cv2.VideoCapture(source)
+def parse_source(source):
+    """"0" (command line / config) -> webcam index 0; anything else unchanged."""
+    return int(source) if isinstance(source, str) and source.isdigit() else source
+
+
+def is_file(source) -> bool:
+    return isinstance(source, str) and os.path.isfile(source)
+
+
+def open_capture(source, cfg: dict) -> cv2.VideoCapture | None:
+    """Open a webcam index, video file, rtsp:// URL or GStreamer pipeline. None if it fails."""
+    if isinstance(source, str) and "!" in source:
+        # GStreamer pipeline (Orin hardware decode, e.g. "rtspsrc ... ! nvv4l2decoder ! ...")
+        cap = cv2.VideoCapture(source, cv2.CAP_GSTREAMER)
+    elif isinstance(source, str) and source.startswith("rtsp://"):
+        # TCP resends lost Wi-Fi packets (clean frames, a little more delay); UDP shows
+        # losses as smeared frames. Must be set before the capture is created.
+        os.environ["OPENCV_FFMPEG_CAPTURE_OPTIONS"] = f"rtsp_transport;{cfg['rtsp_transport']}"
+        timeout_ms = int(cfg["stream_timeout_s"] * 1000)  # default would hang ~30 s on a dead stream
+        cap = cv2.VideoCapture(source, cv2.CAP_FFMPEG, [cv2.CAP_PROP_OPEN_TIMEOUT_MSEC, timeout_ms,
+                                                        cv2.CAP_PROP_READ_TIMEOUT_MSEC, timeout_ms])
+    else:
+        cap = cv2.VideoCapture(source)
     if not cap.isOpened():
-        raise RuntimeError(f"Could not open video source: {source!r}")
-    return cap, isinstance(source, str) and os.path.isfile(source)
+        cap.release()
+        return None
+    if not is_file(source):
+        cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)   # keep only the newest frame (not all backends honour it)
+    return cap
+
+
+def connect(source, cfg: dict, start: float) -> cv2.VideoCapture:
+    """Files: open once or fail. Live sources: retry until the camera is reachable."""
+    while True:
+        cap = open_capture(source, cfg)
+        if cap is not None:
+            return cap
+        if is_file(source):
+            raise RuntimeError(f"Could not open video file: {source!r}")
+        print(f"[{time.perf_counter() - start:6.1f}s] cannot reach {source!r}, "
+              f"retrying in {cfg['reconnect_delay_s']} s")
+        time.sleep(cfg["reconnect_delay_s"])
 
 
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", default="config.yaml")
-    parser.add_argument("--source", help="override config: webcam index, video path, or rtsp:// URL")
+    parser.add_argument("--source", help="override config: webcam index, video path, rtsp:// URL "
+                                         "or GStreamer pipeline")
     parser.add_argument("--no-show", action="store_true", help="no window (benchmarking / SSH on the Orin)")
     args = parser.parse_args()
 
@@ -134,20 +169,32 @@ def main() -> None:
     sm = StateMachine(cfg["grace_period_s"], cfg["vote_min_matches"])
     print(f"gallery: {sorted(gallery)} | threshold {cfg['similarity_threshold']} | "
           f"grace {cfg['grace_period_s']} s")
-    cap, is_file = open_source(source)
+    source = parse_source(source)
+    from_file = is_file(source)
+    start = time.perf_counter()
+    cap = connect(source, cfg, start)
 
     frames, detect_total, face_total, recog_total = 0, 0.0, 0.0, 0.0
     fps = 0.0
-    start = time.perf_counter()
     while True:
         loop_start = time.perf_counter()
         ok, frame = cap.read()
-        if not ok:                          # end of video file, or stream dropped
-            break
+        if not ok:
+            if from_file:                   # end of the video: done
+                break
+            # Live source dropped (Wi-Fi, camera restart, tampering?): report it and keep
+            # retrying. Whether a lost camera raises an alert is a system-integration decision.
+            lost_at = time.perf_counter()
+            print(f"[{lost_at - start:6.1f}s] STREAM LOST: reconnecting")
+            cap.release()
+            cap = connect(source, cfg, start)
+            print(f"[{time.perf_counter() - start:6.1f}s] stream reconnected after "
+                  f"{time.perf_counter() - lost_at:.1f} s")
+            continue
 
         # Video files: use the video's own clock (files can run faster than real time).
         # Live sources: wall clock.
-        now = (cap.get(cv2.CAP_PROP_POS_MSEC) / 1000 if is_file
+        now = (cap.get(cv2.CAP_PROP_POS_MSEC) / 1000 if from_file
                else time.perf_counter() - start)
         out = process_frame(frame, detector, face_det, embedder, gallery, tracker, sm, now, cfg)
         for event in out["events"]:

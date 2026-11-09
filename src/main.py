@@ -1,5 +1,6 @@
 """Capture loop + visualization. Input: webcam index, video file, or RTSP URL."""
 import argparse
+import json
 import os
 import time
 
@@ -102,6 +103,26 @@ def draw_frame(frame: np.ndarray, out: dict, sm: StateMachine, now: float) -> np
         cv2.putText(img, "ALARM: INTRUDER", (15, img.shape[0] - 15),
                     cv2.FONT_HERSHEY_SIMPLEX, 1.1, (255, 255, 255), 3)
     return img
+
+
+def write_vision_state(path: str, sm: StateMachine) -> None:
+    """Publish the current decision for other services (e.g. the homieos hub's fusion hook).
+
+    Output only: nothing here changes a decision. Written atomically (temp file + rename),
+    so a reader never sees a half-written file. "ts" lets readers ignore a stale file.
+    """
+    state = {
+        "v": 1,
+        "ts": time.time(),
+        "friend_present": any(p.state == FRIEND for p in sm.people.values()),
+        "alarm": sm.alarm,
+        "people": [{"id": tid, "state": p.state, "name": p.friend or p.host}
+                   for tid, p in sm.people.items()],
+    }
+    tmp = path + ".tmp"
+    with open(tmp, "w") as f:
+        json.dump(state, f)
+    os.replace(tmp, path)
 
 
 def parse_source(source):
@@ -211,6 +232,8 @@ def main() -> None:
         out = process_frame(frame, detector, face_det, embedder, gallery, tracker, sm, now, cfg)
         for event in out["events"]:
             print(f"[{now:6.1f}s] {event}")
+        if cfg.get("vision_state_file"):
+            write_vision_state(cfg["vision_state_file"], sm)
         detect_ms, face_ms, recog_ms = (out["times"][k] for k in ("detect", "face", "recog"))
 
         frames += 1

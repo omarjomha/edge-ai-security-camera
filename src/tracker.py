@@ -115,6 +115,11 @@ class Tracker:
         self.tracks: list[Track] = []
         self.next_id = 1
 
+    def reset(self) -> None:
+        """Forget every track (e.g. after a camera outage). IDs keep counting up, so a new
+        person never reuses an old ID and inherits its state."""
+        self.tracks = []
+
     def update(self, dets: np.ndarray) -> list[Track]:
         """(N, 6) detections for one frame -> confirmed tracks seen in this frame."""
         people = dets[dets[:, 5] == PERSON]

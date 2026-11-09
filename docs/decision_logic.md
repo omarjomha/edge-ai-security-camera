@@ -59,6 +59,8 @@ evidence are possible, but not needed: the client accepts phone notifications wi
 | 2 | **FRIEND → VERIFYING, timer restarts,** when unknown votes push the friend out of the window | Catches **ID switches** (section 6). Restarting the timer, instead of going straight to INTRUDER, avoids false alarms when the "unknown" votes come from the friend at a bad angle (G2) |
 | 3 | **Alarm latching is not decided by the vision pipeline.** The pipeline reports events (`VERIFYING -> INTRUDER`, `left`, `alarm cleared`); the alarm currently turns off when the intruder's track is deleted (~2 s after leaving the view) | A real system usually keeps the alarm on until someone disarms it. Whether and how it latches belongs to **system integration** (alarm / app side, later phase), not the vision model |
 
+| 4 | **After a camera/stream outage, all tracks are reset:** everyone in view gets a new ID and starts again at VERIFYING (old IDs report `left`) | During an outage no frames are processed, so tracks freeze and the normal "left" path (after `track_max_misses` frames) never fires. On reconnect the tracker would match whoever now stands where the friend stood and hand them FRIEND. We know continuity broke, so we drop it instead of trusting it. Verified on the laptop stream: 12.8 s outage → `#1 left` → `#2 new person -> VERIFYING` |
+
 ## 6. Known risk: ID switches
 
 An **ID switch** is when the tracker moves one person's ID onto another, typically when

@@ -196,6 +196,10 @@ def main() -> None:
             cap = connect(source, cfg, start)
             print(f"[{time.perf_counter() - start:6.1f}s] stream reconnected after "
                   f"{time.perf_counter() - lost_at:.1f} s")
+            # Fail safe: we can't know who moved during the blackout, so drop all tracks.
+            # Everyone in view is re-verified (state machine reports them as "left").
+            tracker.reset()
+            print(f"[{time.perf_counter() - start:6.1f}s] tracks reset: everyone in view is re-verified")
             continue
 
         # Video files: use the video's own clock (files can run faster than real time).

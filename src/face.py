@@ -3,20 +3,49 @@
 Quick-check tools for this module live in scripts/face_check.py."""
 import cv2
 import numpy as np
-from insightface.model_zoo import get_model
 
-from src.runtime import PROVIDERS, make_session, session_options
+from src.runtime import make_session
+
+SCRFD_STRIDES = (8, 16, 32)   # three grids: fine (small faces), medium, coarse (big faces)
+SCRFD_ANCHORS = 2             # anchors per grid cell (same centre)
 
 
 class FaceDetector:
-    """SCRFD face detector. Portability debt: runs through insightface's own ONNX Runtime
-    code; for the Orin we'd load the .onnx ourselves like src/detector.py."""
+    """SCRFD-500M face detector: boxes + 5 landmarks. Plain ONNX Runtime via src/runtime.py,
+    with our own pre/post-processing (no insightface at runtime)."""
 
-    def __init__(self, model_path: str, conf: float = 0.5, input_size: int = 640):
-        # Local file only: get_model never downloads unless passed download=True
-        self.model = get_model(model_path, providers=PROVIDERS, sess_options=session_options())
-        # Fixed input size (letterboxed internally, like YOLO); ctx_id=-1 means CPU
-        self.model.prepare(ctx_id=-1, input_size=(input_size, input_size), det_thresh=conf)
+    def __init__(self, model_path: str, conf: float = 0.5, input_size: int = 640,
+                 nms_iou: float = 0.4):
+        self.session = make_session(model_path)
+        self.input_name = self.session.get_inputs()[0].name
+        # 9 outputs: scores for strides 8/16/32, then box distances x3, then landmarks x3
+        self.output_names = [o.name for o in self.session.get_outputs()]
+        self.input_size = input_size  # the model accepts any size; we fix it (TensorRT-friendly)
+        self.conf = conf
+        self.nms_iou = nms_iou
+        # Grid points never change for a fixed input size: compute them once
+        self.anchor_centers = {s: self._anchor_centers(s) for s in SCRFD_STRIDES}
+
+    def _anchor_centers(self, stride: int) -> np.ndarray:
+        """(cells * 2, 2) pixel positions of every anchor for one stride, row by row."""
+        n = self.input_size // stride
+        ys, xs = np.mgrid[:n, :n]
+        centers = np.stack([xs, ys], axis=-1).reshape(-1, 2).astype(np.float32) * stride
+        return np.repeat(centers, SCRFD_ANCHORS, axis=0)
+
+    def preprocess(self, img_bgr: np.ndarray) -> tuple[np.ndarray, float]:
+        """Resize (keep aspect ratio) into the top-left of a black square -> (1, 3, S, S)."""
+        h, w = img_bgr.shape[:2]
+        s = self.input_size
+        if h > w:                         # same rounding as SCRFD's reference code
+            new_h, new_w = s, int(s * w / h)
+        else:
+            new_h, new_w = int(s * h / w), s
+        canvas = np.zeros((s, s, 3), dtype=np.uint8)
+        canvas[:new_h, :new_w] = cv2.resize(img_bgr, (new_w, new_h))
+        # (pixel - 127.5) / 128, BGR -> RGB, HWC -> NCHW
+        blob = cv2.dnn.blobFromImage(canvas, 1.0 / 128, (s, s), (127.5, 127.5, 127.5), swapRB=True)
+        return blob, new_h / h
 
     def detect(self, img_bgr: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
         """BGR image -> (boxes, landmarks).
@@ -24,10 +53,34 @@ class FaceDetector:
         boxes:     (N, 5)    x1, y1, x2, y2, score   in image pixels
         landmarks: (N, 5, 2) (x, y) for left eye, right eye, nose, left mouth, right mouth
         """
-        boxes, landmarks = self.model.detect(img_bgr)  # threshold + NMS happen inside
-        if landmarks is None:
-            landmarks = np.zeros((0, 5, 2), dtype=np.float32)
-        return boxes, landmarks
+        blob, scale = self.preprocess(img_bgr)
+        outs = self.session.run(self.output_names, {self.input_name: blob})
+
+        all_boxes, all_scores, all_kps = [], [], []
+        for i, stride in enumerate(SCRFD_STRIDES):
+            scores = outs[i][:, 0]
+            keep = scores >= self.conf
+            centers = self.anchor_centers[stride][keep]
+            # The model predicts distances (in grid units) from each anchor point to the
+            # box's left/top/right/bottom edges, and offsets to the 5 landmarks
+            dist = outs[i + 3][keep] * stride
+            kps = outs[i + 6][keep].reshape(-1, 5, 2) * stride
+            all_boxes.append(np.column_stack([centers - dist[:, :2], centers + dist[:, 2:]]))
+            all_scores.append(scores[keep])
+            all_kps.append(centers[:, None, :] + kps)
+
+        boxes = np.concatenate(all_boxes) / scale      # undo the resize
+        scores = np.concatenate(all_scores)
+        kps = np.concatenate(all_kps) / scale
+        if len(boxes) == 0:
+            return np.zeros((0, 5), np.float32), np.zeros((0, 5, 2), np.float32)
+
+        xywh = np.column_stack([boxes[:, :2], boxes[:, 2:] - boxes[:, :2]])
+        idx = cv2.dnn.NMSBoxes(xywh.tolist(), scores.tolist(), self.conf, self.nms_iou)
+        idx = np.asarray(idx, dtype=int).flatten()
+        idx = idx[np.argsort(-scores[idx])]            # highest score first
+        dets = np.column_stack([boxes[idx], scores[idx]]).astype(np.float32)
+        return dets, kps[idx].astype(np.float32)
 
 
 def detect_in_persons(face_det: FaceDetector, frame: np.ndarray, dets: np.ndarray,

@@ -1,288 +1,272 @@
 # Running the AI Stack on the Jetson Orin Nano
 
-> **Goal:** run the full AI stack (YOLO → tracker → SCRFD → ArcFace → votes → state machine)
-> on the Orin GPU, fed by a **live H.264 stream from the laptop webcam over the network**
-> (stands in for the Pi camera, which isn't ready). Measure speed and confirm FP16 accuracy.
-> No sensing-hub integration or sensor triggers yet.
->
-> **Status:** written on the laptop; the TensorRT path and the stream setup have not run on
-> an Orin yet. Expect to adjust versions once JetPack is known (step 1).
+> **Status (Nov 9, 2026):** steps 1–8 verified on the team's Orin with the recorded test
+> clips; hub integration (step 10) active, including the annotated live view in the hub's
+> camera source, tested with the laptop webcam as a temporary stand-in. Still to do: the
+> **live Pi camera stream** (step 9, waiting for the Pi side).
 
-```
-Laptop                                                   Orin
-──────                                                   ────
-webcam ─► FFmpeg (H.264, 720p, 15 fps) ─► MediaMTX ──(LAN, RTSP/TCP :8554)──► python3 -m src.main
-                                          (RTSP server)                       --source rtsp://<laptop-ip>:8554/cam
-```
+**Board used:** Jetson Orin Nano Engineering Reference Developer Kit **Super**, JetPack
+**7.2.1** (L4T R39.2.1), Ubuntu 24.04, Python 3.12.3, CUDA 13.2, TensorRT 10.16, OpenCV 4.8.0
+(with FFmpeg and GStreamer), NumPy 1.26.4, power mode **MAXN_SUPER**. The team's hub
+software (`~/homieos`, `ece490-hub` service, Mosquitto, kiosk browser) runs on the same
+board, so all measurements below include that load.
 
 ## How it runs on the Orin
 
-- The **same Python code** runs on the Orin's ARM CPU (`python3 -m src.main`).
-- Each model is an **ONNX Runtime session** (`src/runtime.py`). With `backend: tensorrt`,
-  ONNX Runtime hands the model to **TensorRT**, which builds an **FP16 engine** for the
-  Orin GPU on the first run (minutes) and caches it in `models/trt_cache/` (seconds after).
-- Engines are tied to this GPU + TensorRT version: they are always built **on the Orin**.
-  Only the `.onnx` files are copied.
-- Stream decoding, pre/post-processing, tracker, votes and state machine run on the CPU.
-- The RTSP input uses TCP, 5 s timeouts and automatic reconnect (`config.yaml`:
-  `rtsp_transport`, `stream_timeout_s`, `reconnect_delay_s`).
+```
+Pi camera ──RTSP/H.264──► python -m src.main (our pipeline, ~/edge-ai-security-camera)
+                            │  YOLO, SCRFD, ArcFace: TensorRT FP16 engines on the GPU
+                            │  tracker, votes, state machine: CPU
+                            ├─► window on the Orin's screen (friend/foe boxes), optional
+                            ├─► annotated H.264 stream on tcp://127.0.0.1:5600 (stream_out)
+                            │        └─► homieos camera source → console / app live view
+                            └─► ~/homieos/data/vision_state.json (every frame)
+                                     │
+                         homieos hub (ece490-hub) ──► fusion.is_authorized_person_present()
+```
 
-## 1. Check the Orin's versions
+- **Why native TensorRT (not ONNX Runtime) on the GPU:** no `onnxruntime-gpu` build supports
+  JetPack 7 / CUDA 13 on the Orin's GPU (compute capability 8.7). The PyPI aarch64 wheel
+  installs, but fails at run time with `cudaErrorNoKernelImageForDevice`. So `backend: tensorrt`
+  (`src/runtime.py`) uses **JetPack's own TensorRT** plus NVIDIA's **cuda-python** bindings:
+  - Each `.onnx` file becomes an **FP16 engine** on first use, cached as
+    `models/trt_cache/<model><size>_fp16_trt<version>.engine`.
+  - Engines are tied to this GPU and TensorRT version. They are always built on the Orin;
+    only the `.onnx` files are copied.
+- ONNX Runtime (CPU) is still installed: `backend: cpu` and the FP16 accuracy check use it.
+
+## 1. SSH access from the laptop (optional, lets Claude Code / scripts run commands)
 
 ```bash
-cat /etc/nv_tegra_release                    # L4T release, e.g. "R36 (release), REVISION: 4.3"
-dpkg-query --show nvidia-jetpack             # JetPack version, e.g. 6.2
-python3 --version                            # JetPack 6.x: 3.10
+# laptop: create a key once (no passphrase so scripts can use it)
+ssh-keygen -t ed25519 -N "" -C "omar-laptop orin-test" -f ~/.ssh/id_ed25519
+# Orin terminal: allow it (paste the laptop's ~/.ssh/id_ed25519.pub line)
+mkdir -p ~/.ssh && chmod 700 ~/.ssh && echo "<public key line>" >> ~/.ssh/authorized_keys && chmod 600 ~/.ssh/authorized_keys
+# laptop: test
+ssh jetson@jetson.internal 'cat /etc/nv_tegra_release'
+```
+
+This only adds one line to `~/.ssh/authorized_keys`: passwords, other users and SSH settings
+are unchanged. Remove that line to revoke it. Note: the `jetson` account has
+**passwordless sudo**, so anything logged in as `jetson` effectively has root.
+
+## 2. Check the versions
+
+```bash
+cat /etc/nv_tegra_release; dpkg-query --show nvidia-jetpack
+python3 --version
 python3 -c "import cv2; print(cv2.__version__)"
-dpkg -l | grep -E "nvinfer |cuda-toolkit"    # TensorRT and CUDA versions
+python3 -c "import tensorrt; print(tensorrt.__version__)"
+dpkg -l | grep -E "nvinfer |cuda-toolkit"
+nvpmodel -q          # power mode (MAXN_SUPER is the fastest)
 ```
 
-| L4T | JetPack | Notes |
-|---|---|---|
-| R36.x | **6.x** (target) | Ubuntu 22.04, Python 3.10, CUDA 12, TensorRT 10, OpenCV 4.8 |
-| R35.x | 5.x | Python 3.8 and OpenCV 4.5: **not supported as-is** (code needs Python ≥3.10 and OpenCV ≥4.7). Ask before upgrading someone else's board |
+Needed: Python ≥3.10, OpenCV ≥4.7 (`NMSBoxesBatched`), TensorRT Python module. JetPack 7.2.1
+has all of them out of the box.
 
-Write the versions down: they go in the results.
-
-## 2. Copy the project to the Orin
+## 3. Copy the project
 
 ```bash
-# On the Orin
-git clone https://github.com/omarjomha/edge-ai-security-camera.git
-```
-
-Then copy the files git ignores, from the laptop (PowerShell or Git Bash, in the repo folder):
-
-```bash
-scp models/yolo11n.onnx models/scrfd_500m.onnx models/arcface_mbf.onnx <user>@<orin-ip>:~/edge-ai-security-camera/models/
-scp -r data/enroll data/test_faces data/test_clips <user>@<orin-ip>:~/edge-ai-security-camera/data/
+# Orin
+cd ~ && git clone https://github.com/omarjomha/edge-ai-security-camera.git
+# laptop, in the repo folder: files git ignores
+scp models/yolo11n.onnx models/scrfd_500m.onnx models/arcface_mbf.onnx jetson@jetson.internal:~/edge-ai-security-camera/models/
+scp -r data/enroll data/test_faces data/test_clips jetson@jetson.internal:~/edge-ai-security-camera/data/
 ```
 
 - `scrfd_500m.onnx` must be the **fixed** copy (`scripts/fix_scrfd_outputs.py` already ran on
-  the laptop's file). Don't take a fresh one from insightface.
-- No `.pt`, no `gallery/`: the gallery is rebuilt on the Orin (step 5).
-- `data/test_clips/` (synthetic clips) is only the offline fallback (end of this guide).
+  the laptop's file). Compare `md5sum models/*.onnx` on both machines.
+- `data/test_faces/` holds other people's photos: delete them from the Orin after step 8.
+- No `gallery/`: it is rebuilt on the Orin (step 6).
 
-## 3. Python environment (Orin)
+## 4. Python environment (no sudo, nothing system-wide)
 
 ```bash
 cd ~/edge-ai-security-camera
-sudo apt install -y python3-venv python3-pip
-python3 -m venv --system-site-packages .venv   # sees JetPack's OpenCV
-source .venv/bin/activate
-pip install -r requirements-orin.txt           # numpy<2, pyyaml, scipy
+python3 -m venv --system-site-packages .venv        # sees JetPack's OpenCV, NumPy, TensorRT
+.venv/bin/pip install -r requirements-orin.txt      # numpy<2, pyyaml, scipy, onnxruntime (CPU), cuda-python
 ```
 
-**onnxruntime-gpu (Jetson build).** The normal `pip install onnxruntime-gpu` has no ARM GPU
-build. Install the wheel that matches your **JetPack / CUDA** version from NVIDIA's Jetson
-sources:
-- **Jetson AI Lab pip index** (JetPack 6): `pip install onnxruntime-gpu --index-url <index for your JetPack/CUDA>`. Find the current index URL on jetson-ai-lab.com.
-- **Jetson Zoo** (elinux.org/Jetson_Zoo, "ONNX Runtime"): direct wheel links per JetPack.
-
-Then check:
+Check:
 
 ```bash
-python3 -c "import numpy, cv2, onnxruntime as ort; print(numpy.__version__, cv2.__version__, ort.__version__); print(ort.get_available_providers())"
+.venv/bin/python -c "import numpy, cv2, tensorrt, onnxruntime; from cuda.bindings import runtime as rt; print(numpy.__version__, cv2.__version__, tensorrt.__version__, onnxruntime.__version__, rt.cudaGetDeviceCount())"
 ```
 
-Expected: NumPy 1.x, OpenCV ≥4.7, and the providers list includes
-`TensorrtExecutionProvider` and `CUDAExecutionProvider`. Don't continue until it does.
+Expected: NumPy 1.26.x, OpenCV 4.8.0, TensorRT 10.16.x, `(<cudaError_t.cudaSuccess: 0>, 1)`.
 
-- If pip pulled in a CPU `onnxruntime` as well, remove it: `pip uninstall onnxruntime`
-  (keep `onnxruntime-gpu`).
-- If `import cv2` fails or OpenCV is older than 4.7: `pip install "opencv-python==4.10.0.84"`
-  inside the venv. It includes FFmpeg, so RTSP input still works.
+- **Don't** rely on `onnxruntime-gpu` from PyPI on this board (see "How it runs").
+- `cuda-python` must match JetPack's CUDA **major** version (13 here):
+  `pip install "cuda-python>=13,<14"`.
+- Keep `numpy<2`: JetPack's OpenCV is built for NumPy 1.x.
 
-## 4. Settings for the Orin
-
-Edit `config.yaml` **on the Orin only**:
+## 5. Settings (edit `config.yaml` on the Orin only)
 
 ```yaml
 backend: tensorrt
+vision_state_file: "/home/jetson/homieos/data/vision_state.json"   # read by the hub (step 10)
 ```
 
-Keep everything else the same as on the laptop, so results are comparable.
+Everything else stays as on the laptop, so results are comparable.
 
-**Power mode** (has a big effect on speed). Use the fastest mode and record which one:
+## 6. Enroll
 
 ```bash
-sudo nvpmodel -q                 # current mode
-sudo nvpmodel -m 0               # mode 0 is usually the max mode; check the name it prints
-sudo jetson_clocks               # pin clocks at max (resets on reboot)
+.venv/bin/python -m scripts.enroll
 ```
 
-Make sure the fan is running; the Orin slows itself down when hot.
+The first run builds the SCRFD-640 + ArcFace engines. Measured: **~1.5 min**. Result:
+`omar: ENROLLED`, scores 0.89 / 0.89 (same as the laptop).
 
-## 5. Enroll on the Orin
+## 7. First run: engine builds, then check the pipeline on clips
 
 ```bash
-python3 -m scripts.enroll
+for c in A_friend B_stranger C_face_hidden D_hidden_then_face E_friend_and_stranger group_pan; do
+  .venv/bin/python -m src.main --source data/test_clips/synthetic_$c.mp4 --no-show
+done
 ```
 
-The first run builds TensorRT engines for SCRFD (640) and ArcFace: **a few minutes**, quiet
-terminal. Expected: `omar: ENROLLED`, per-photo scores close to the laptop's (0.89).
+- The first run builds the remaining engines. Measured: YOLO ~6.5 min, SCRFD-320 ~1.2 min,
+  ArcFace ~1.4 min. Later runs load the cache in **0.2 s**.
+- The startup line must read `backend tensorrt fp16 | YOLO TensorRT | SCRFD TensorRT | ArcFace TensorRT`.
+- Measured events are **identical to the laptop**: friend FRIEND at 0.4 s, stranger INTRUDER at
+  3.1 s, hidden face INTRUDER at 3.9 s, hidden-then-face cleared at 6.3 s, friend + stranger →
+  GUEST at 3.1 s, group of 6 → all INTRUDER.
+- A `WeightsContext.cpp: Empty initializer 385` warning while building SCRFD is harmless.
 
-## 6. Laptop: start the webcam stream
-
-**Install once** (Windows, from a terminal):
-
-```powershell
-winget install Gyan.FFmpeg
-winget install bluenviron.mediamtx
-```
-
-Open a new terminal afterwards so `ffmpeg` and `mediamtx` are on the PATH.
-
-**a. Start the RTSP server** (leave it running in its own terminal). Start it from a folder
-**outside the repo** (e.g. your home folder): it writes `auto.crt` / `auto.key` (a self-signed
-certificate + private key) into the current folder, and those must never be committed.
-Pass its **bundled config file**: without it MediaMTX runs with an empty configuration and
-rejects the stream (`path 'cam' is not configured`, FFmpeg: `400 Bad Request`).
-
-```powershell
-cd ~
-$mtx = "$env:LOCALAPPDATA\Microsoft\WinGet\Packagesluenviron.mediamtx_Microsoft.Winget.Source_8wekyb3d8bbwe"
-& "$mtx\mediamtx.exe" "$mtx\mediamtx.yml"
-```
-
-It should print `[RTSP] started with listeners on :8554`. Start FFmpeg (step c) only after
-that line. If Windows asks about network access, allow **private networks**.
-
-**b. Find the webcam's name:**
-
-```powershell
-ffmpeg -hide_banner -list_devices true -f dshow -i dummy
-```
-
-Look for a `(video)` line. On Omar's laptop: `"USB2.0 FHD UVC WebCam"`. To see which sizes and
-frame rates it supports: `ffmpeg -hide_banner -list_options true -f dshow -i video="<name>"`.
-
-**c. Publish the webcam as H.264, 720p, 15 fps** (the planned Pi settings), in a second terminal:
-
-```powershell
-ffmpeg -hide_banner -loglevel warning -f dshow -video_size 1280x720 -framerate 30 -i video="USB2.0 FHD UVC WebCam" `
-  -r 15 -c:v libx264 -preset ultrafast -tune zerolatency -pix_fmt yuv420p -g 15 -b:v 2M `
-  -f rtsp -rtsp_transport tcp rtsp://localhost:8554/cam
-```
-
-- Capture at the webcam's native 30 fps (many webcams, including this one, only offer 720p at
-  30), then `-r 15` outputs 15 fps.
-- `ultrafast` + `zerolatency`: minimal encoding delay. `-g 15`: a full keyframe every second,
-  so a (re)connecting reader starts quickly.
-- Check the stream (optional): `ffprobe -v error -rtsp_transport tcp -show_entries stream=codec_name,width,height,avg_frame_rate -of compact rtsp://localhost:8554/cam`
-  should print `h264`, `1280`, `720`, `15/1`.
-
-**d. Check it on the laptop first** (proves the stream works before the network is involved):
-
-```powershell
-python -m src.main --source rtsp://localhost:8554/cam
-```
-
-You should see yourself labelled FRIEND. Close it with `q`. (Verified on the laptop:
-FRIEND after ~3 s including connection time; laptop CPU kept up at 15.6 fps.)
-
-**e. Let the Orin in.** Allow inbound TCP 8554 (PowerShell **as administrator**):
-
-```powershell
-New-NetFirewallRule -DisplayName "RTSP 8554 (Orin test)" -Direction Inbound -Protocol TCP -LocalPort 8554 -Action Allow -Profile Private
-```
-
-Find the laptop's IP with `ipconfig` (IPv4 address of the Wi-Fi/Ethernet adapter). The
-network must be marked **Private** in Windows, and both devices must be on the same network.
-Campus Wi-Fi often blocks device-to-device traffic: a phone hotspot or home router is safer.
-Remove the rule after testing:
-`Remove-NetFirewallRule -DisplayName "RTSP 8554 (Orin test)"`.
-
-## 7. Orin: run the pipeline on the stream
+## 8. Benchmark and FP16 accuracy check
 
 ```bash
-nc -zv <laptop-ip> 8554          # must say "succeeded"; if not: firewall / network (step 6e)
-python3 -m src.main --source rtsp://<laptop-ip>:8554/cam --no-show
+.venv/bin/python -m scripts.benchmark data/test_clips/synthetic_E_friend_and_stranger.mp4   # 2 people
+.venv/bin/python -m scripts.benchmark data/test_clips/synthetic_group_pan.mp4               # 4–6 people
+.venv/bin/python -m scripts.check_backend_parity data/test_faces/*.jpg data/test_faces/*.jpeg
 ```
 
-- The first run builds YOLO and SCRFD-320 engines (minutes); ArcFace's is reused.
-- Check the startup line: `backend tensorrt fp16 | YOLO Tensorrt | SCRFD Tensorrt | ArcFace Tensorrt`.
-- Drop `--no-show` if the Orin has a monitor attached, to see the boxes.
+Measured (MAXN_SUPER, hub + kiosk running, warmup excluded; JSON in `results/orin/`):
 
-Test in front of the laptop webcam and watch the events in the Orin terminal:
+| Stage, mean ms | 2 people | ~4.3 people | Orin CPU only, 2 people |
+|---|---|---|---|
+| read frame | 2.7 | 2.2 | |
+| detect (YOLO) | 16.1 | 16.0 | |
+| face (SCRFD, per person) | 10.8 | 18.1 | |
+| recog (align + ArcFace) | 5.1 | 8.1 | |
+| other (tracker, votes, states) | 0.6 | 0.7 | |
+| **total** | **32.6** (p95 33.4) | **43.0** (p95 54.4) | 235.3 |
+| **fps** | **30.7** | **23.3** | 4.3 |
 
-| Do this | Expected event |
-|---|---|
-| Face the webcam | `#N ... FRIEND omar` within ~0.5 s |
-| Turn your back / cover your face from the start | `#N VERIFYING -> INTRUDER` after 3 s |
-| Then face the webcam | `INTRUDER -> FRIEND omar (alarm cleared)` |
-| Someone not enrolled (with consent) | `INTRUDER` after 3 s |
-| Stop FFmpeg on the laptop (Ctrl+C) | `STREAM LOST: reconnecting`, then `cannot reach ...` retries (every 2 s while MediaMTX runs; ~7 s if MediaMTX is down too) |
-| Start FFmpeg again | `stream reconnected after X s` within ~2 s, then `tracks reset`: everyone in view gets a new ID and is re-verified from VERIFYING |
+Per model call (incl. pre/post): YOLO 17.0 ms (CPU 128.7), SCRFD 4.8 ms (16.5),
+ArcFace 2.5 ms (26.3).
 
-## 8. Benchmark on the stream
+FP16 accuracy: same-photo embedding similarity CPU vs TensorRT **0.9985–0.9998**;
+person-vs-person table changes by at most **0.003** (e.g. 0.574 vs 0.577), so the 0.40
+threshold is unaffected. Detections and landmarks within 0.5 px of the CPU.
 
-Run each **twice** and keep the second result (the first includes engine builds). Stay in
-view of the webcam; for the second run, have two people in view.
+Afterwards: `rm data/test_faces/<other people>.jpeg` on the Orin.
+
+## 9. Live view on the Orin's screen (Pi camera stream)
+
+**Pending: the Pi stream isn't ready yet.** When it is (H.264 over RTSP, ideally 1280×720,
+15 fps, keyframe every 15 frames, e.g. MediaMTX on the Pi with `source: rpiCamera`):
 
 ```bash
-python3 -m scripts.benchmark rtsp://<laptop-ip>:8554/cam --frames 600    # 40 s at 15 fps
+cd ~/edge-ai-security-camera
+nc -zv <pi-ip> 8554     # must succeed
+DISPLAY=:1 XAUTHORITY=/run/user/2002/gdm/Xauthority \
+  .venv/bin/python -m src.main --source rtsp://<pi-ip>:8554/cam
 ```
 
-Two fps numbers are printed:
-- **processing fps**: how fast the AI stack could run (1 / pipeline time per frame).
-- **achieved fps**: frames actually processed per second. Capped at the stream's 15 fps;
-  clearly below 15 means the Orin can't keep up and frames are being dropped.
+- The Orin's screen is the X11 session `:1` (where the kiosk runs); the two variables let a
+  command started over SSH open its window there. Use `--no-show` to run headless.
+- The Orin's screen is **1024×768** and the hub's kiosk browser covers it. `display_fullscreen:
+  true` asks for a full-screen window, but this GNOME/mutter setup ignored the request (the
+  window stayed 320×203 behind the kiosk). **Use the hub's live view instead (step 10b)**,
+  which needs no window at all.
+- Or set `source:` in the Orin's `config.yaml` to the Pi URL and drop `--source`.
+- Stream drops: the pipeline logs `STREAM LOST`, retries, and resets all tracks after
+  reconnecting (everyone is re-verified).
 
-The `read` stage is time spent waiting for / decoding the next frame. Results are saved as
-`results/benchmark_<device>_<backend>.json` (no images, safe to commit). Optional
-comparison: `backend: cuda`, then `backend: cpu`.
-
-Not measured by the script: **end-to-end delay** (camera → decision), which also includes
-encoding and the network. Rough check: point the webcam at a running stopwatch on a phone
-and compare it with the time shown in the Orin's window.
-
-While it runs, watch the hardware in a second Orin terminal:
+**Temporary stand-in used on Nov 9 (laptop webcam instead of the Pi):** on the laptop,
+MediaMTX (started with its bundled `mediamtx.yml`, from a folder outside the repo) + FFmpeg
+publishing the webcam to `rtsp://localhost:8554/cam`; an SSH reverse tunnel carries it to the
+Orin, where it appears as `rtsp://127.0.0.1:8554/cam` (no firewall changes):
 
 ```bash
-tegrastats        # GR3D_FREQ = GPU load, RAM used, power (VDD_IN)
+ssh -N -R 127.0.0.1:8554:127.0.0.1:8554 jetson@jetson.internal     # laptop, keep running
+# Orin
+.venv/bin/python -m src.main --source rtsp://127.0.0.1:8554/cam --no-show
 ```
 
-## 9. FP16 accuracy check
+## 10. Hub integration (homieos)
+
+### 10a. Decision: fusion hook
+
+The pipeline writes its decision to `~/homieos/data/vision_state.json` every frame
+(`vision_state_file`, step 5):
+
+```json
+{"v": 1, "ts": 1794262103.87, "friend_present": true, "alarm": false,
+ "people": [{"id": 1, "state": "FRIEND", "name": "omar"}, {"id": 2, "state": "GUEST", "name": "omar"}]}
+```
+
+On the Orin, the hub's placeholder `~/homieos/app/hub/fusion.py` was filled in to read it
+(original kept as `fusion.py.bak-before-vision`). `is_authorized_person_present()` returns
+`friend_present`, or **False** if the file is missing or older than 2 s (pipeline not
+running), the same as the original placeholder. `service.py` and the hub's state machine are
+unchanged.
+
+Verified by calling the hook the same way the hub does: friend clip → True, stranger → False,
+friend + guest → True, pipeline stopped → False after 2 s.
+
+**Activate it: restart the hub** (from a terminal on the Orin; a few seconds of downtime, the
+kiosk reconnects):
 
 ```bash
-python3 -m scripts.check_backend_parity data/test_faces/*.jpg data/test_faces/*.jpeg
+systemctl --user restart ece490-hub 2>/dev/null || sudo systemctl restart ece490-hub
 ```
 
-Expected: same-photo similarity ≥ ~0.99, and the person-vs-person table within ~0.01 of
-the CPU values. If differences approach the margin around `similarity_threshold` (0.40),
-note it, and compare with `trt_fp16: false`.
+Undo: `cp ~/homieos/app/hub/fusion.py.bak-before-vision ~/homieos/app/hub/fusion.py`, then
+restart again. The `fusion.py` change lives only on the Orin: it should go into the homieos
+repository too.
 
-## 10. Bring the results back
+### 10b. Annotated live view in the hub's camera source
 
-```bash
-# from the laptop
-scp "<user>@<orin-ip>:~/edge-ai-security-camera/results/benchmark_*.json" results/
+`stream_out` (Orin's `config.yaml`) encodes every annotated frame (boxes, labels, alarm
+banner) with GStreamer x264 and serves it as MPEG-TS over TCP on 127.0.0.1:5600:
+
+```yaml
+stream_out: "appsrc ! videoconvert ! video/x-raw,format=I420 ! x264enc tune=zerolatency speed-preset=ultrafast bitrate=2000 key-int-max=15 ! h264parse config-interval=-1 ! mpegtsmux ! tcpserversink host=127.0.0.1 port=5600 sync=false"
+stream_out_fps: 15
 ```
 
-Record for the report: JetPack/L4T version, power mode, backend, network (Wi-Fi/Ethernet),
-processing and achieved fps, per-stage latency (mean and p95) for 1 and 2 people, model load
-time (first run vs cached), reconnect behaviour, parity results.
+homieos opens it like any camera: in `~/homieos/hub.toml`, `[media] camera_url =
+"tcp://127.0.0.1:5600"` (original kept as `hub.toml.bak-before-vision-camera`), then restart
+the hub. Watch it at `https://jetson.internal:8443/console` → live view → **"Sensing Hub
+camera"** (or in the app). Verified: homieos' own PyAV opens it in 1.5 s (H.264, 1280×720), and
+the console shows the live annotated view. `stream_out` works with `--no-show` (no window).
 
-## Offline fallback: video files
+Undo: restore `hub.toml` from the backup, restart the hub, stop the pipeline
+(`pkill -f "src[.]main"`; the `[.]` stops pkill from matching its own command line).
 
-If the network setup fails, the same commands work on the copied clips, e.g.
-`python3 -m src.main --source data/test_clips/synthetic_E_friend_and_stranger.mp4 --no-show`
-and `python3 -m scripts.benchmark data/test_clips/synthetic_group_pan.mp4` (6 people).
+### Open point
+
+Open point for the team: the hub's design asks for recognition within a **1.0 s** window
+after a sensor event. A recognized friend takes ~0.4 s, but our INTRUDER decision waits for
+the 3 s grace period; the hook simply answers "friend present right now".
 
 ## Troubleshooting
 
-| Symptom | Likely cause / fix |
+| Symptom | Cause / fix |
 |---|---|
-| `backend 'tensorrt' needs TensorrtExecutionProvider` | CPU `onnxruntime` installed instead of the Jetson GPU build (step 3) |
-| `asked for tensorrt but got CUDA` | TensorRT couldn't take this model. Try `backend: cuda` to keep going; note which model |
-| `numpy.core.multiarray failed to import` / `_ARRAY_API not found` | NumPy 2 installed: `pip install "numpy<2"` |
-| `AttributeError: ... NMSBoxesBatched` | OpenCV older than 4.7: see the opencv-python fallback in step 3 |
-| FFmpeg: `400 Bad Request`; MediaMTX: `path 'cam' is not configured` | MediaMTX started without its config file (step 6a) |
-| `cannot reach 'rtsp://...'` / `nc` fails | MediaMTX or FFmpeg not running, wrong IP, firewall rule missing, network not "Private", or Wi-Fi blocks device-to-device traffic |
-| Works on the laptop (`localhost`) but not from the Orin | Network problem, not code: firewall / network profile / Wi-Fi isolation (step 6e) |
-| Smeared or grey frames | Packet loss over UDP: keep `rtsp_transport: tcp` |
-| Achieved fps well below 15 | Orin can't keep up: check power mode / `jetson_clocks`, `tegrastats`, per-stage times |
-| First run "hangs" for minutes | TensorRT is building engines. Later runs load `models/trt_cache/` in seconds |
-| Engine rebuilt every run | Cache folder not writable, or the model file changed |
-| Out of memory | Close the desktop/browser; run headless over SSH (`--no-show`) |
+| `cudaErrorNoKernelImageForDevice` | PyPI `onnxruntime-gpu` has no code for the Orin GPU. Use `backend: tensorrt` (native) |
+| `backend 'tensorrt' needs JetPack's tensorrt module and cuda-python` | venv created without `--system-site-packages`, or `cuda-python` missing (step 4) |
+| `ModuleNotFoundError: No module named 'src'` | Run from the repo folder with `python -m ...`, or set `PYTHONPATH=.` |
+| First run "hangs" for minutes | TensorRT is building engines (step 7). Watch `models/trt_cache/` fill up |
+| Engine rebuilt every run | Cache folder not writable, model file changed, or TensorRT was updated |
+| `numpy.core.multiarray failed to import` | NumPy 2 got installed: `pip install "numpy<2"` |
+| Window doesn't appear on the Orin screen | Missing `DISPLAY=:1 XAUTHORITY=...`, or it's behind the kiosk browser |
+| `cannot reach 'rtsp://...'` | Pi stream not running, wrong IP/path, or network blocks device-to-device traffic |
+| Orin screen black | GNOME blanks and locks it after 5 min idle (`idle-delay 300`); the kernel shows `dpms=Off`. Needs keyboard/mouse input to wake and the `jetson` password to unlock |
+| Clicks/keys on the remote screen do nothing | The **GL.iNet KVM's USB** (its virtual keyboard + mouse) disconnected from the Orin (Nov 9, 15:58, during full GPU load). Check `journalctl -k \| grep -i glinet`; re-seat its USB cable or reset/reboot the KVM. If it recurs under load, power the KVM separately |
+| Camera source missing in the hub | `camera_url` not set, hub not restarted, or the pipeline (stream_out) isn't running |
+| Hub ignores the pipeline | Hub not restarted after changing `fusion.py`, `vision_state_file` not set, or the pipeline isn't running (file older than 2 s) |
+| Slower than the table above | Power mode not MAXN_SUPER, thermal throttling (`tegrastats`), or more people in view |

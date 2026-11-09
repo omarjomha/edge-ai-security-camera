@@ -1,8 +1,10 @@
-"""Person tracking, ByteTrack-style: stable IDs across frames.
+"""Person tracking (ByteTrack-style) + per-track friend voting.
 
 Simplification vs. real ByteTrack: motion is predicted with an alpha-beta filter
 (velocity nudged by each prediction error) instead of a Kalman filter.
 """
+from collections import Counter, deque
+
 import numpy as np
 from scipy.optimize import linear_sum_assignment
 
@@ -39,14 +41,52 @@ def match(tracks: list, boxes: np.ndarray, min_iou: float) -> tuple[list, list, 
             [j for j in range(len(boxes)) if j not in matched_b])
 
 
+def assign_faces(tracks: list, face_boxes: np.ndarray) -> dict[int, int]:
+    """Link each face to at most one track -> {track index: face index}.
+
+    A face can belong to a track only if its centre is in the upper half of the
+    person box; among valid tracks, the closest to the expected head position
+    (top-centre of the box) wins. One face never counts for two people.
+    """
+    if not tracks or len(face_boxes) == 0:
+        return {}
+    INVALID = 1e6
+    cost = np.full((len(tracks), len(face_boxes)), INVALID)
+    for i, t in enumerate(tracks):
+        x1, y1, x2, y2 = t.box
+        w, h = x2 - x1, y2 - y1
+        head = np.array([(x1 + x2) / 2, y1 + 0.15 * h])     # where a head usually is
+        for j, (fx1, fy1, fx2, fy2, _) in enumerate(face_boxes):
+            cx, cy = (fx1 + fx2) / 2, (fy1 + fy2) / 2
+            if x1 <= cx <= x2 and y1 <= cy <= y1 + 0.5 * h:  # centre in the upper half
+                cost[i, j] = np.hypot(cx - head[0], cy - head[1]) / w  # size-independent
+    rows, cols = linear_sum_assignment(cost)
+    return {int(r): int(c) for r, c in zip(rows, cols) if cost[r, c] < INVALID}
+
+
 class Track:
-    def __init__(self, box: np.ndarray, score: float):
+    def __init__(self, box: np.ndarray, score: float, vote_window: int):
         self.box = box.astype(np.float32)        # x1, y1, x2, y2 (frame pixels)
         self.velocity = np.zeros(4, np.float32)  # box change per frame
         self.score = score
         self.track_id = None                     # assigned once confirmed
         self.hits = 1                            # frames matched so far
         self.misses = 0                          # consecutive frames without a match
+        # Recent face results: a friend's name, or None for "face seen, no match".
+        # Frames without a usable face add nothing. Oldest votes drop out automatically.
+        self.votes: deque[str | None] = deque(maxlen=vote_window)
+
+    def add_vote(self, name: str | None) -> None:
+        self.votes.append(name)
+
+    def identity(self, min_matches: int) -> tuple[str | None, int]:
+        """(friend name, votes for them) if a friend has >= min_matches recent votes,
+        else (None, best friend's vote count)."""
+        counts = Counter(v for v in self.votes if v is not None)
+        if not counts:
+            return None, 0
+        name, count = counts.most_common(1)[0]
+        return (name, count) if count >= min_matches else (None, count)
 
     def predict(self) -> None:
         self.box = self.box + self.velocity      # assume the person keeps moving the same way
@@ -65,12 +105,13 @@ class Track:
 
 class Tracker:
     def __init__(self, high_conf: float, new_conf: float, match_iou: float,
-                 max_misses: int, min_hits: int):
+                 max_misses: int, min_hits: int, vote_window: int):
         self.high_conf = high_conf    # boxes >= this are "confident" (stage 1)
         self.new_conf = new_conf      # only boxes >= this may start a new track
         self.match_iou = match_iou    # minimum overlap to accept a stage-1 match
         self.max_misses = max_misses  # frames a lost track is kept before deletion
         self.min_hits = min_hits      # matched frames before a track gets an ID
+        self.vote_window = vote_window  # face results remembered per track
         self.tracks: list[Track] = []
         self.next_id = 1
 
@@ -104,7 +145,7 @@ class Tracker:
         # New tracks only from unmatched, clearly confident boxes
         for bi in left_h:
             if high[bi, 4] >= self.new_conf:
-                self.tracks.append(Track(high[bi, :4], high[bi, 4]))
+                self.tracks.append(Track(high[bi, :4], high[bi, 4], self.vote_window))
 
         # Delete tracks lost for too long, and unconfirmed ones that already missed a
         # frame (likely a one-off false detection); give an ID to newly confirmed ones

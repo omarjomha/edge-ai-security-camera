@@ -10,45 +10,83 @@ import yaml
 from src.detector import Detector, draw
 from src.face import FaceDetector, FaceEmbedder, align_face, detect_in_persons
 from src.gallery import load_gallery, match
-from src.tracker import PERSON, Track, Tracker
+from src.tracker import PERSON, Track, Tracker, assign_faces
 
 # Label colours (BGR)
 GREEN, RED, GREY, WHITE = (0, 200, 0), (0, 0, 255), (160, 160, 160), (255, 255, 255)
 
 
-def draw_tracks(img: np.ndarray, tracks: list[Track]) -> np.ndarray:
-    """White person boxes with their track ID (draws on img in place)."""
-    for t in tracks:
-        x1, y1, x2, y2 = t.box.astype(int)
-        cv2.rectangle(img, (x1, y1), (x2, y2), WHITE, 2)
-        cv2.putText(img, f"person #{t.track_id}", (x1, max(y1 - 10, 30)),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.9, WHITE, 2)
-    return img
+def track_boxes(tracks: list[Track]) -> np.ndarray:
+    """Tracks -> (N, 6) person "detections" so face detection runs per tracked person."""
+    if not tracks:
+        return np.zeros((0, 6), dtype=np.float32)
+    return np.array([[*t.box, t.score, PERSON] for t in tracks], dtype=np.float32)
 
 
 def identify_faces(embedder: FaceEmbedder, frame: np.ndarray, boxes: np.ndarray,
                    landmarks: np.ndarray, gallery: dict[str, np.ndarray],
-                   threshold: float, min_face_px: int) -> list[tuple[str, tuple]]:
-    """Each face -> (label, colour). Per-frame decision only: no tracking or voting yet."""
+                   threshold: float, min_face_px: int) -> list[tuple[str | None, float | None]]:
+    """Each face -> (friend name or None, score). (None, None) = too small to judge."""
     results = []
     for box, pts in zip(boxes, landmarks):
         if box[2] - box[0] < min_face_px:   # too few pixels for a trustworthy embedding
-            results.append(("too small", GREY))
+            results.append((None, None))
             continue
-        name, score = match(embedder.embed(align_face(frame, pts)), gallery, threshold)
-        if name is not None:
-            results.append((f"FRIEND {name} {score:.2f}", GREEN))
-        else:
-            results.append((f"FOE {score:.2f}", RED))
+        results.append(match(embedder.embed(align_face(frame, pts)), gallery, threshold))
     return results
 
 
-def draw_identities(img: np.ndarray, boxes: np.ndarray, identities: list[tuple[str, tuple]]) -> np.ndarray:
-    """Draw each face box in its label colour (draws on img in place)."""
-    for (x1, y1, x2, y2, _), (label, colour) in zip(boxes, identities):
-        cv2.rectangle(img, (int(x1), int(y1)), (int(x2), int(y2)), colour, 3)
-        cv2.putText(img, label, (int(x1), max(int(y1) - 10, 30)),   # keep text inside the image
-                    cv2.FONT_HERSHEY_SIMPLEX, 1.0, colour, 2)
+def process_frame(frame: np.ndarray, detector: Detector, face_det: FaceDetector,
+                  embedder: FaceEmbedder, gallery: dict[str, np.ndarray],
+                  tracker: Tracker, cfg: dict) -> dict:
+    """One frame through the whole pipeline. Returns everything needed to draw/log it."""
+    times = {}
+    t0 = time.perf_counter()
+    dets = detector.detect(frame)       # includes weak boxes (>= 0.1) for the tracker
+    times["detect"] = (time.perf_counter() - t0) * 1000
+
+    tracks = tracker.update(dets)       # stable person IDs; < 1 ms, not timed separately
+
+    t0 = time.perf_counter()
+    face_boxes, face_landmarks = detect_in_persons(face_det, frame, track_boxes(tracks))
+    times["face"] = (time.perf_counter() - t0) * 1000  # grows with the number of people
+
+    t0 = time.perf_counter()
+    face_results = identify_faces(embedder, frame, face_boxes, face_landmarks, gallery,
+                                  cfg["similarity_threshold"], cfg["min_face_px"])
+    times["recog"] = (time.perf_counter() - t0) * 1000  # align + embed + match
+
+    # Each usable face becomes one vote for the track it belongs to
+    for ti, fi in assign_faces(tracks, face_boxes).items():
+        name, score = face_results[fi]
+        if score is not None:           # too-small faces are not evidence either way
+            tracks[ti].add_vote(name)
+
+    strong = dets[dets[:, 4] >= cfg["track_high_conf"]]
+    pets = strong[strong[:, 5] != PERSON]
+    return {"tracks": tracks, "face_boxes": face_boxes, "face_results": face_results,
+            "pets": pets, "times": times}
+
+
+def draw_frame(frame: np.ndarray, out: dict, min_matches: int) -> np.ndarray:
+    """Pets (raw boxes), people (track decision), faces (this frame's raw result)."""
+    img = draw(frame, out["pets"])
+    for t in out["tracks"]:
+        name, count = t.identity(min_matches)
+        if name is not None:
+            label, colour = f"#{t.track_id} FRIEND {name} ({count}/{len(t.votes)})", GREEN
+        else:
+            label, colour = f"#{t.track_id} verifying ({len(t.votes)} faces)", WHITE
+        x1, y1, x2, y2 = t.box.astype(int)
+        cv2.rectangle(img, (x1, y1), (x2, y2), colour, 2)
+        cv2.putText(img, label, (x1, max(y1 - 10, 30)), cv2.FONT_HERSHEY_SIMPLEX, 0.9, colour, 2)
+    for (x1, y1, x2, y2, _), (name, score) in zip(out["face_boxes"], out["face_results"]):
+        if score is None:
+            label, colour = "too small", GREY
+        else:
+            label, colour = (f"{name} {score:.2f}", GREEN) if name else (f"? {score:.2f}", RED)
+        cv2.rectangle(img, (int(x1), int(y1)), (int(x2), int(y2)), colour, 2)
+        cv2.putText(img, label, (int(x1), int(y2) + 25), cv2.FONT_HERSHEY_SIMPLEX, 0.7, colour, 2)
     return img
 
 
@@ -81,7 +119,7 @@ def main() -> None:
         raise SystemExit(f"No gallery at {cfg['gallery_path']}: run  python -m scripts.enroll  first")
     gallery = load_gallery(cfg["gallery_path"])   # loaded once; no hot-reload yet
     tracker = Tracker(cfg["track_high_conf"], cfg["track_new_conf"], cfg["track_match_iou"],
-                      cfg["track_max_misses"], cfg["track_min_hits"])
+                      cfg["track_max_misses"], cfg["track_min_hits"], cfg["vote_window"])
     print(f"gallery: {sorted(gallery)} | threshold {cfg['similarity_threshold']}")
     cap = open_source(source)
 
@@ -94,21 +132,8 @@ def main() -> None:
         if not ok:                          # end of video file, or stream dropped
             break
 
-        t0 = time.perf_counter()
-        dets = detector.detect(frame)       # includes weak boxes (>= 0.1) for the tracker
-        detect_ms = (time.perf_counter() - t0) * 1000
-
-        tracks = tracker.update(dets)       # stable person IDs; < 1 ms, not timed separately
-        strong = dets[dets[:, 4] >= cfg["track_high_conf"]]  # faces/pets: confident boxes only
-
-        t0 = time.perf_counter()
-        face_boxes, face_landmarks = detect_in_persons(face_det, frame, strong)
-        face_ms = (time.perf_counter() - t0) * 1000  # grows with the number of people
-
-        t0 = time.perf_counter()
-        identities = identify_faces(embedder, frame, face_boxes, face_landmarks, gallery,
-                                    cfg["similarity_threshold"], cfg["min_face_px"])
-        recog_ms = (time.perf_counter() - t0) * 1000  # align + embed + match, grows with faces
+        out = process_frame(frame, detector, face_det, embedder, gallery, tracker, cfg)
+        detect_ms, face_ms, recog_ms = (out["times"][k] for k in ("detect", "face", "recog"))
 
         frames += 1
         detect_total += detect_ms
@@ -119,8 +144,7 @@ def main() -> None:
         fps = loop_fps if frames == 1 else 0.9 * fps + 0.1 * loop_fps
 
         if not args.no_show:
-            vis = draw(frame, strong[strong[:, 5] != PERSON])   # pets: raw boxes (not tracked)
-            vis = draw_identities(draw_tracks(vis, tracks), face_boxes, identities)
+            vis = draw_frame(frame, out, cfg["vote_min_matches"])
             cv2.putText(vis, f"{fps:.1f} fps | detect {detect_ms:.0f} | face {face_ms:.0f} | "
                         f"recog {recog_ms:.0f} ms (dev machine)", (10, 25),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 255), 2)

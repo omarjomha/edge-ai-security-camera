@@ -1,7 +1,9 @@
 """Run the live pipeline on still images and save annotated copies (e.g. for the report).
 
 Usage: python -m scripts.annotate_images data/test_faces --out results/test_faces
-Uses the exact functions src/main.py runs per frame, so the labels match the live demo.
+Uses the exact per-frame pipeline of src/main.py. A still image can't be tracked from
+one frame, so each image is fed as if held in front of the camera for vote_window frames
+(fresh tracker per image); the saved figure shows the resulting track decision.
 """
 import argparse
 import os
@@ -9,10 +11,11 @@ import os
 import cv2
 import yaml
 
-from src.detector import Detector, draw
-from src.face import FaceDetector, FaceEmbedder, detect_in_persons
+from src.detector import Detector
+from src.face import FaceDetector, FaceEmbedder
 from src.gallery import load_gallery
-from src.main import draw_identities, identify_faces
+from src.main import draw_frame, process_frame
+from src.tracker import Tracker
 
 IMAGE_EXTS = (".jpg", ".jpeg", ".png")
 MAX_SIDE = 1280              # output long side in px (close to the live 720p camera)
@@ -42,16 +45,16 @@ def main() -> None:
         scale = MAX_SIDE / max(img.shape[:2])
         if scale < 1:
             img = cv2.resize(img, None, fx=scale, fy=scale, interpolation=cv2.INTER_AREA)
-        dets = detector.detect(img)
-        dets = dets[dets[:, 4] >= cfg["track_high_conf"]]  # detector_conf is low for the tracker
-        boxes, landmarks = detect_in_persons(face_det, img, dets)
-        identities = identify_faces(embedder, img, boxes, landmarks, gallery,
-                                    cfg["similarity_threshold"], cfg["min_face_px"])
-        vis = draw_identities(draw(img, dets), boxes, identities)
+        tracker = Tracker(cfg["track_high_conf"], cfg["track_new_conf"], cfg["track_match_iou"],
+                          cfg["track_max_misses"], cfg["track_min_hits"], cfg["vote_window"])
+        for _ in range(cfg["vote_window"] + cfg["track_min_hits"]):   # "hold still" N frames
+            out = process_frame(img, detector, face_det, embedder, gallery, tracker, cfg)
+        vis = draw_frame(img, out, cfg["vote_min_matches"])
 
         out_path = os.path.join(args.out, os.path.splitext(fname)[0] + "_annotated.jpg")
         cv2.imwrite(out_path, vis)
-        print(f"{fname:<14} -> {[label for label, _ in identities]}  saved {out_path}")
+        decisions = [(t.track_id, *t.identity(cfg["vote_min_matches"])) for t in out["tracks"]]
+        print(f"{fname:<14} -> (id, friend, votes) {decisions}  saved {out_path}")
 
 
 if __name__ == "__main__":

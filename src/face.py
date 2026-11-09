@@ -1,9 +1,9 @@
-"""Face detection + embedding wrappers (SCRFD/YuNet + ArcFace/SFace)."""
-import argparse
-import os
+"""Live-pipeline face code: detect (SCRFD), align, embed (ArcFace).
 
+Quick-check tools for this module live in scripts/face_check.py."""
 import cv2
 import numpy as np
+import onnxruntime as ort
 from insightface.model_zoo import get_model
 
 
@@ -93,6 +93,23 @@ def align_face(img: np.ndarray, landmarks: np.ndarray) -> np.ndarray:
     return cv2.warpAffine(img, matrix, (ALIGNED_SIZE, ALIGNED_SIZE), borderValue=0)
 
 
+class FaceEmbedder:
+    """ArcFace: aligned 112x112 face -> 512-d unit vector. Plain ONNX Runtime, like
+    src/detector.py, so the backend can be swapped for TensorRT on the Orin."""
+
+    def __init__(self, model_path: str):
+        self.session = ort.InferenceSession(model_path, providers=["CPUExecutionProvider"])
+        self.input_name = self.session.get_inputs()[0].name  # "input.1"
+
+    def embed(self, aligned_bgr: np.ndarray) -> np.ndarray:
+        """Aligned face (112, 112, 3) uint8 BGR -> (512,) float32 with length 1."""
+        img = cv2.cvtColor(aligned_bgr, cv2.COLOR_BGR2RGB)        # trained on RGB
+        img = (img.astype(np.float32) - 127.5) / 127.5            # 0..255 -> -1..1
+        blob = img.transpose(2, 0, 1)[np.newaxis]                 # HWC -> (1, 3, 112, 112)
+        vec = self.session.run(None, {self.input_name: np.ascontiguousarray(blob)})[0][0]
+        return vec / np.linalg.norm(vec)  # L2-normalize: only the direction matters
+
+
 def draw_faces(img: np.ndarray, boxes: np.ndarray, landmarks: np.ndarray) -> np.ndarray:
     out = img.copy()
     for (x1, y1, x2, y2, score), pts in zip(boxes, landmarks):
@@ -102,35 +119,3 @@ def draw_faces(img: np.ndarray, boxes: np.ndarray, landmarks: np.ndarray) -> np.
         for x, y in pts:
             cv2.circle(out, (int(x), int(y)), 2, (0, 0, 255), -1)  # red landmark dots
     return out
-
-
-if __name__ == "__main__":
-    # Quick check: python -m src.face path/to/image.jpg
-    parser = argparse.ArgumentParser()
-    parser.add_argument("image")
-    parser.add_argument("--model", default="models/scrfd_500m.onnx")
-    parser.add_argument("--save", default="results/faces.jpg")
-    # Aligned crops are real faces -> default into data/ (gitignored), not results/
-    parser.add_argument("--aligned-dir", default="data/aligned")
-    args = parser.parse_args()
-
-    img = cv2.imread(args.image)
-    boxes, landmarks = FaceDetector(args.model).detect(img)
-
-    print(f"image: {img.shape}  ->  {len(boxes)} faces")
-    for i, ((x1, y1, x2, y2, score), pts) in enumerate(zip(boxes, landmarks)):
-        print(f"  face {i}: score {score:.2f}  size {x2 - x1:.0f}x{y2 - y1:.0f}px  "
-              f"left eye {pts[0].round()}  right eye {pts[1].round()}")
-
-    cv2.imwrite(args.save, draw_faces(img, boxes, landmarks))
-    print(f"saved: {args.save}")
-
-    if len(landmarks):
-        aligned = [align_face(img, pts) for pts in landmarks]
-        os.makedirs(args.aligned_dir, exist_ok=True)
-        for i, face in enumerate(aligned):
-            cv2.imwrite(os.path.join(args.aligned_dir, f"face_{i}.jpg"), face)
-        # All aligned faces side by side: eyes should line up across the whole strip
-        strip_path = os.path.join(args.aligned_dir, "strip.jpg")
-        cv2.imwrite(strip_path, np.hstack(aligned))
-        print(f"saved {len(aligned)} aligned faces ({ALIGNED_SIZE}x{ALIGNED_SIZE}) + {strip_path}")

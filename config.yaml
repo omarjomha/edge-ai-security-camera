@@ -5,6 +5,7 @@ face_det_model: models/scrfd_500m.onnx    # SCRFD-500M (from insightface buffalo
 face_embed_model: models/arcface_mbf.onnx # ArcFace, MobileFaceNet backbone (buffalo_s); next stage
 face_conf: 0.5                  # SCRFD minimum face score
 face_det_size: 320               # SCRFD input size; person crops are small, 640 is overkill
-min_face_px: 40                  # skip faces too small to trust
+gallery_path: gallery/gallery.npz        # enrolled friend templates (gitignored)
+min_face_px: 40                 # skip faces too small to trust
 similarity_threshold: 0.40       # placeholder: set from threshold sweep
 grace_period_s: 5.0              # no friend match within this → INTRUDER

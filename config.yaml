@@ -1,6 +1,11 @@
 source: 0                        # webcam index | video path | rtsp:// URL
 detector_model: models/yolo11n.onnx
-detector_conf: 0.5
+detector_conf: 0.1                       # low on purpose: the tracker also uses weak boxes
+track_high_conf: 0.5                     # confident person box (also the cut-off for faces)
+track_new_conf: 0.6                      # only boxes this confident start a new track
+track_match_iou: 0.2                     # min overlap to link a track to a confident box
+track_max_misses: 30                     # frames a lost track is kept (~2 s at 15 fps)
+track_min_hits: 3                        # matched frames before a track gets an ID
 face_det_model: models/scrfd_500m.onnx    # SCRFD-500M (from insightface buffalo_s)
 face_embed_model: models/arcface_mbf.onnx # ArcFace, MobileFaceNet backbone (buffalo_s); next stage
 face_conf: 0.5                  # SCRFD minimum face score

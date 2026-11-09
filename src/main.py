@@ -10,9 +10,20 @@ import yaml
 from src.detector import Detector, draw
 from src.face import FaceDetector, FaceEmbedder, align_face, detect_in_persons
 from src.gallery import load_gallery, match
+from src.tracker import PERSON, Track, Tracker
 
 # Label colours (BGR)
-GREEN, RED, GREY = (0, 200, 0), (0, 0, 255), (160, 160, 160)
+GREEN, RED, GREY, WHITE = (0, 200, 0), (0, 0, 255), (160, 160, 160), (255, 255, 255)
+
+
+def draw_tracks(img: np.ndarray, tracks: list[Track]) -> np.ndarray:
+    """White person boxes with their track ID (draws on img in place)."""
+    for t in tracks:
+        x1, y1, x2, y2 = t.box.astype(int)
+        cv2.rectangle(img, (x1, y1), (x2, y2), WHITE, 2)
+        cv2.putText(img, f"person #{t.track_id}", (x1, max(y1 - 10, 30)),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.9, WHITE, 2)
+    return img
 
 
 def identify_faces(embedder: FaceEmbedder, frame: np.ndarray, boxes: np.ndarray,
@@ -69,6 +80,8 @@ def main() -> None:
     if not os.path.exists(cfg["gallery_path"]):
         raise SystemExit(f"No gallery at {cfg['gallery_path']}: run  python -m scripts.enroll  first")
     gallery = load_gallery(cfg["gallery_path"])   # loaded once; no hot-reload yet
+    tracker = Tracker(cfg["track_high_conf"], cfg["track_new_conf"], cfg["track_match_iou"],
+                      cfg["track_max_misses"], cfg["track_min_hits"])
     print(f"gallery: {sorted(gallery)} | threshold {cfg['similarity_threshold']}")
     cap = open_source(source)
 
@@ -82,11 +95,14 @@ def main() -> None:
             break
 
         t0 = time.perf_counter()
-        dets = detector.detect(frame)
+        dets = detector.detect(frame)       # includes weak boxes (>= 0.1) for the tracker
         detect_ms = (time.perf_counter() - t0) * 1000
 
+        tracks = tracker.update(dets)       # stable person IDs; < 1 ms, not timed separately
+        strong = dets[dets[:, 4] >= cfg["track_high_conf"]]  # faces/pets: confident boxes only
+
         t0 = time.perf_counter()
-        face_boxes, face_landmarks = detect_in_persons(face_det, frame, dets)
+        face_boxes, face_landmarks = detect_in_persons(face_det, frame, strong)
         face_ms = (time.perf_counter() - t0) * 1000  # grows with the number of people
 
         t0 = time.perf_counter()
@@ -103,7 +119,8 @@ def main() -> None:
         fps = loop_fps if frames == 1 else 0.9 * fps + 0.1 * loop_fps
 
         if not args.no_show:
-            vis = draw_identities(draw(frame, dets), face_boxes, identities)
+            vis = draw(frame, strong[strong[:, 5] != PERSON])   # pets: raw boxes (not tracked)
+            vis = draw_identities(draw_tracks(vis, tracks), face_boxes, identities)
             cv2.putText(vis, f"{fps:.1f} fps | detect {detect_ms:.0f} | face {face_ms:.0f} | "
                         f"recog {recog_ms:.0f} ms (dev machine)", (10, 25),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 255), 2)

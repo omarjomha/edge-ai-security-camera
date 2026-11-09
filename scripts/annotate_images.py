@@ -43,6 +43,7 @@ def main() -> None:
         if scale < 1:
             img = cv2.resize(img, None, fx=scale, fy=scale, interpolation=cv2.INTER_AREA)
         dets = detector.detect(img)
+        dets = dets[dets[:, 4] >= cfg["track_high_conf"]]  # detector_conf is low for the tracker
         boxes, landmarks = detect_in_persons(face_det, img, dets)
         identities = identify_faces(embedder, img, boxes, landmarks, gallery,
                                     cfg["similarity_threshold"], cfg["min_face_px"])

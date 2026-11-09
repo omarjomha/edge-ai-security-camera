@@ -5,6 +5,6 @@ pyyaml
 onnxruntime    # CPU; don't also install onnxruntime-openvino
 insightface    # face det + embed; weights (buffalo_s) live in models/, paths in config.yaml
 ultralytics    # dev only: export to ONNX (pulls in PyTorch)
-lap            # for Ultralytics' built-in ByteTrack
+scipy          # Hungarian matching in src/tracker.py
 onnx           # dev only: export + inspect ONNX files
 onnxslim       # dev only: Ultralytics uses it to simplify the exported graph

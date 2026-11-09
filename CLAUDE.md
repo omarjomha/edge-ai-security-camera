@@ -91,7 +91,7 @@ Pi camera ──(Wi-Fi, RTSP/H.264)──► Orin
 ```
 edge-ai-security-camera/
 ├── CLAUDE.md
-├── requirements.txt
+├── requirements.txt     # runtime (laptop); requirements-dev.txt (export tools); requirements-orin.txt (Jetson)
 ├── config.yaml          # source, thresholds, model paths, grace period
 ├── models/              # .onnx files (gitignored if large)
 ├── gallery/             # enrolled embeddings (gitignored, personal data)
@@ -105,14 +105,19 @@ edge-ai-security-camera/
 │   ├── enrollment.py    # photos in memory -> quality checks -> template (runs on device)
 │   ├── tracker.py       # tracking + per-track voting
 │   ├── state_machine.py # event logic
+│   ├── runtime.py       # ONNX Runtime sessions: backend cpu | cuda | tensorrt (the one swap point)
 │   └── main.py          # capture loop, visualization
 ├── scripts/
 │   ├── enroll.py        # dev wrapper: data/enroll/<name>/ folders -> src/enrollment.py -> gallery
 │   ├── detector_check.py # dev: YOLO on one still image
 │   ├── face_check.py    # dev: faces + aligned crops on one image, or similarity table
+│   ├── annotate_images.py # dev: run the pipeline on still images -> annotated figures
 │   ├── export_onnx.py
+│   ├── fix_scrfd_outputs.py # one-time model-file fix (variable output sizes)
+│   ├── benchmark.py     # per-stage latency + fps on a video -> results/benchmark_<device>_<backend>.json
+│   ├── check_backend_parity.py # FP16 check: CPU vs configured backend embeddings
 │   └── evaluate.py      # precision/recall, threshold sweep, latency
-├── docs/                # design notes: decision_logic.md, enrollment_design.md
+├── docs/                # decision_logic.md, enrollment_design.md, orin_setup.md
 └── results/             # metrics, plots, screenshots for the report
 ```
 

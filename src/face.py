@@ -109,14 +109,3 @@ class FaceEmbedder:
         blob = img.transpose(2, 0, 1)[np.newaxis]                 # HWC -> (1, 3, 112, 112)
         vec = self.session.run(None, {self.input_name: np.ascontiguousarray(blob)})[0][0]
         return vec / np.linalg.norm(vec)  # L2-normalize: only the direction matters
-
-
-def draw_faces(img: np.ndarray, boxes: np.ndarray, landmarks: np.ndarray) -> np.ndarray:
-    out = img.copy()
-    for (x1, y1, x2, y2, score), pts in zip(boxes, landmarks):
-        cv2.rectangle(out, (int(x1), int(y1)), (int(x2), int(y2)), (255, 128, 0), 2)  # blue
-        cv2.putText(out, f"{score:.2f} {int(x2 - x1)}px", (int(x1), int(y1) - 5),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.45, (255, 128, 0), 1)
-        for x, y in pts:
-            cv2.circle(out, (int(x), int(y)), 2, (0, 0, 255), -1)  # red landmark dots
-    return out

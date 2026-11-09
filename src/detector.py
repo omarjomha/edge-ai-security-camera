@@ -97,6 +97,6 @@ def draw(frame: np.ndarray, dets: np.ndarray) -> np.ndarray:
     for x1, y1, x2, y2, score, cls in dets:
         p1, p2 = (int(x1), int(y1)), (int(x2), int(y2))
         cv2.rectangle(out, p1, p2, (0, 255, 0), 2)  # green, BGR order
-        cv2.putText(out, f"{CLASSES[int(cls)]} {score:.2f}", (p1[0], max(p1[1] - 6, 12)),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
+        cv2.putText(out, f"{CLASSES[int(cls)]} {score:.2f}", (p1[0], max(p1[1] - 10, 30)),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0, 255, 0), 2)
     return out

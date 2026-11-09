@@ -1,0 +1,6 @@
+# Dev only (laptop): exporting/inspecting models. Not needed to run the pipeline.
+-r requirements.txt
+ultralytics    # export YOLO to ONNX (pulls in PyTorch, AGPL)
+onnx           # export + inspect ONNX files; scripts/fix_scrfd_outputs.py
+onnxslim       # Ultralytics uses it to simplify the exported graph
+insightface    # original source of the buffalo_s weights; not imported by our code

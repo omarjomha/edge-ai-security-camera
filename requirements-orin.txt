@@ -1,0 +1,7 @@
+# Runtime on the Jetson Orin (JetPack 6.x, Python 3.10). See docs/orin_setup.md.
+# NOT listed on purpose (installed separately):
+#   - OpenCV: use JetPack's system OpenCV (venv with --system-site-packages)
+#   - onnxruntime-gpu: Jetson build matching your JetPack/CUDA version
+numpy<2        # JetPack's OpenCV and the Jetson onnxruntime-gpu wheels are built for NumPy 1.x
+pyyaml
+scipy

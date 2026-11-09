@@ -11,7 +11,7 @@ from src.detector import Detector, draw
 from src.face import FaceDetector, FaceEmbedder, align_face, detect_in_persons
 from src.gallery import load_gallery, match
 from src.state_machine import FRIEND, INTRUDER, StateMachine
-from src.runtime import backend_label, configure, describe
+from src.runtime import backend_label, configure, describe, device_name
 from src.tracker import PERSON, Track, Tracker, assign_faces
 
 # Label colours (BGR)
@@ -218,7 +218,7 @@ def main() -> None:
         if not args.no_show:
             vis = draw_frame(frame, out, sm, now)
             cv2.putText(vis, f"{fps:.1f} fps | detect {detect_ms:.0f} | face {face_ms:.0f} | "
-                        f"recog {recog_ms:.0f} ms (dev machine)", (10, 25),
+                        f"recog {recog_ms:.0f} ms ({device_name()}, {backend_label()})", (10, 25),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 255), 2)
             cv2.imshow("friend vs foe", vis)
             if cv2.waitKey(1) & 0xFF == ord("q"):  # waitKey also lets the window redraw
@@ -229,7 +229,7 @@ def main() -> None:
 
     if frames:
         elapsed = time.perf_counter() - start
-        print(f"[dev machine] {frames} frames | avg detect {detect_total / frames:.1f} ms | "
+        print(f"[{device_name()}, {backend_label()}] {frames} frames | avg detect {detect_total / frames:.1f} ms | "
               f"avg face {face_total / frames:.1f} ms | avg recog {recog_total / frames:.1f} ms | "
               f"avg loop {frames / elapsed:.1f} fps")
 

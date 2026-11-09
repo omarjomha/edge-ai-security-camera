@@ -80,6 +80,15 @@ def describe(session: ort.InferenceSession) -> str:
     return session.get_providers()[0].replace("ExecutionProvider", "")
 
 
+def device_name() -> str:
+    """'NVIDIA Jetson Orin Nano ...' on a Jetson, else 'dev machine' (for labelling results)."""
+    try:
+        with open("/proc/device-tree/model") as f:      # exists on Jetson boards
+            return f.read().strip("\x00 \n")
+    except OSError:
+        return "dev machine"
+
+
 def backend_label() -> str:
     """Short label for logs/benchmarks, e.g. 'cpu' or 'tensorrt fp16'."""
     b = _settings["backend"]

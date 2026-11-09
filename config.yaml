@@ -23,4 +23,7 @@ min_face_px: 40                  # skip faces too small to trust
 vote_window: 10                          # recent face results remembered per track
 vote_min_matches: 5                      # friend votes in the window to call a track FRIEND
 similarity_threshold: 0.40       # placeholder: set from threshold sweep
-grace_period_s: 3.0              # no friend match within this → INTRUDER
+grace_period_s: 3.0              # no friend match within this → INTRUDER (or GUEST, below)
+allow_accompanied_guests: true   # unknown person + verified FRIEND in view → GUEST, no alarm
+guest_window_s: 10               # INTRUDER → GUEST if a friend is verified within this of their arrival
+guest_arrival_gap_s: 2           # ...and only a friend who appeared within this of them (walked in together)

@@ -50,7 +50,7 @@ def main() -> None:
             img = cv2.resize(img, None, fx=scale, fy=scale, interpolation=cv2.INTER_AREA)
         tracker = Tracker(cfg["track_high_conf"], cfg["track_new_conf"], cfg["track_match_iou"],
                           cfg["track_max_misses"], cfg["track_min_hits"], cfg["vote_window"])
-        sm = StateMachine(cfg["grace_period_s"], cfg["vote_min_matches"])
+        sm = StateMachine(cfg["grace_period_s"], cfg["vote_min_matches"], cfg["allow_accompanied_guests"], cfg["guest_window_s"], cfg["guest_arrival_gap_s"])
         # "Hold still" just past the grace period at 15 fps, so every person has a verdict
         n_frames = int((cfg["grace_period_s"] + 1) * 15)
         for i in range(n_frames):

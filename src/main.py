@@ -10,12 +10,12 @@ import yaml
 from src.detector import Detector, draw
 from src.face import FaceDetector, FaceEmbedder, align_face, detect_in_persons
 from src.gallery import load_gallery, match
-from src.state_machine import FRIEND, INTRUDER, StateMachine
+from src.state_machine import FRIEND, GUEST, INTRUDER, StateMachine
 from src.runtime import backend_label, configure, describe, device_name
 from src.tracker import PERSON, Track, Tracker, assign_faces
 
 # Label colours (BGR)
-GREEN, RED, GREY, YELLOW = (0, 200, 0), (0, 0, 255), (160, 160, 160), (0, 220, 255)
+GREEN, RED, GREY, YELLOW, ORANGE = (0, 200, 0), (0, 0, 255), (160, 160, 160), (0, 220, 255), (0, 140, 255)
 
 
 def track_boxes(tracks: list[Track]) -> np.ndarray:
@@ -80,6 +80,8 @@ def draw_frame(frame: np.ndarray, out: dict, sm: StateMachine, now: float) -> np
         p = sm.people[t.track_id]
         if p.state == FRIEND:
             label, colour = f"#{t.track_id} FRIEND {p.friend}", GREEN
+        elif p.state == GUEST:
+            label, colour = f"#{t.track_id} GUEST (with {p.host})", ORANGE
         elif p.state == INTRUDER:
             label, colour = f"#{t.track_id} INTRUDER", RED
         else:                           # VERIFYING: show the grace-period countdown
@@ -170,7 +172,7 @@ def main() -> None:
     gallery = load_gallery(cfg["gallery_path"])   # loaded once; no hot-reload yet
     tracker = Tracker(cfg["track_high_conf"], cfg["track_new_conf"], cfg["track_match_iou"],
                       cfg["track_max_misses"], cfg["track_min_hits"], cfg["vote_window"])
-    sm = StateMachine(cfg["grace_period_s"], cfg["vote_min_matches"])
+    sm = StateMachine(cfg["grace_period_s"], cfg["vote_min_matches"], cfg["allow_accompanied_guests"], cfg["guest_window_s"], cfg["guest_arrival_gap_s"])
     print(f"backend {backend_label()} | YOLO {describe(detector.session)} | "
           f"SCRFD {describe(face_det.session)} | ArcFace {describe(embedder.session)}")
     print(f"gallery: {sorted(gallery)} | threshold {cfg['similarity_threshold']} | "

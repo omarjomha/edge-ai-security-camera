@@ -67,6 +67,7 @@ Pi camera ──(Wi-Fi, RTSP/H.264)──► Orin
 **Core rules:**
 - YOLO **triggers**; face recognition only **suppresses**.
 - A person with no friend match within the grace period → **intruder**. This covers hidden or absent faces (fails safe).
+- Exception: someone who walks in **together** with a recognized friend (appeared within 2 s of them) → **guest** (no alarm), even when armed. Owner + guest must not alarm. Accepts tailgating risk by design; see `docs/decision_logic.md`, decision 5 (also: how this relates to arm/disarm).
 - Enrollment means storing averaged embeddings per friend. **No training/retraining** to add a friend.
 
 ## Tech stack & portability rules
@@ -131,7 +132,7 @@ edge-ai-security-camera/
 6. [ ] (If Orin borrowed) Build TensorRT FP16 engines and benchmark on the Orin; otherwise document the deploy plan. **Current focus:** test the AI stack on the Orin (runs, speed, FP16 accuracy) fed by a **live RTSP stream of the laptop webcam** (stands in for the Pi camera); video files only as a fallback. No hub/sensor-trigger work yet (see `docs/orin_setup.md`)
 7. [ ] Report: architecture diagram, model comparison table, demo screenshots, metrics, risks, next steps (include the production enrollment design from `docs/enrollment_design.md`)
 
-**Later phase (after the live pipeline):** enrollment API + routing on the Orin, phone-app upload, pairing/auth, gallery hot-reload, sensing hub ↔ Orin communication, sensor-triggered capture, Pi camera input (GStreamer hardware decode). Don't build these until the pipeline milestones are done.
+**Later phase (after the live pipeline):** enrollment API + routing on the Orin, phone-app upload, pairing/auth, gallery hot-reload, sensing hub ↔ Orin communication, arm/disarm + entry delay (holds INTRUDER events), sensor-triggered capture, Pi camera input (GStreamer hardware decode). Don't build these until the pipeline milestones are done.
 
 ## Known risks to keep in mind
 

@@ -57,7 +57,7 @@ def main() -> None:
     gallery = load_gallery(cfg["gallery_path"])
     tracker = Tracker(cfg["track_high_conf"], cfg["track_new_conf"], cfg["track_match_iou"],
                       cfg["track_max_misses"], cfg["track_min_hits"], cfg["vote_window"])
-    sm = StateMachine(cfg["grace_period_s"], cfg["vote_min_matches"])
+    sm = StateMachine(cfg["grace_period_s"], cfg["vote_min_matches"], cfg["allow_accompanied_guests"], cfg["guest_window_s"], cfg["guest_arrival_gap_s"])
     print(f"{device_name()} | backend {backend_label()} | YOLO {describe(detector.session)} | "
           f"SCRFD {describe(face_det.session)} | ArcFace {describe(embedder.session)} | "
           f"model load {load_s:.1f} s")

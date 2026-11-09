@@ -112,7 +112,7 @@ edge-ai-security-camera/
 │   ├── face_check.py    # dev: faces + aligned crops on one image, or similarity table
 │   ├── export_onnx.py
 │   └── evaluate.py      # precision/recall, threshold sweep, latency
-├── docs/                # design notes (e.g. enrollment_design.md)
+├── docs/                # design notes: decision_logic.md, enrollment_design.md
 └── results/             # metrics, plots, screenshots for the report
 ```
 
@@ -134,7 +134,8 @@ edge-ai-security-camera/
 - Night: the standard Pi camera has no IR → Pi NoIR + IR illuminator later; test low light early
 - Spoofing (photo of a friend) is out of scope for the POC; liveness detection is future work
 - Wi-Fi stream latency/drops → 720p @ 15 fps H.264 is enough; measure end-to-end latency on the Orin
-- Face data is personal data: keep `gallery/` and `data/` out of git
+- Face data is personal data: keep `gallery/` and `data/` out of git (and images in `results/`)
+- Tracker ID switches (people crossing) can hand a FRIEND state to a stranger; covered only if the stranger's face is visible afterwards. Test crossing clips in M5 (see `docs/decision_logic.md`)
 
 ## Useful references (non-academic)
 

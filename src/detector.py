@@ -1,7 +1,8 @@
 """YOLO person/pet detector wrapper (ONNX Runtime backend)."""
 import cv2
 import numpy as np
-import onnxruntime as ort
+
+from src.runtime import make_session
 
 PAD_VALUE = 114  # grey padding, same value Ultralytics used during training
 
@@ -29,7 +30,7 @@ def letterbox(img: np.ndarray, size: int) -> tuple[np.ndarray, float, tuple[int,
 class Detector:
     def __init__(self, model_path: str, conf: float = 0.5, iou: float = 0.45):
         # CPU for now; on the Orin this whole class is swapped for a TensorRT version
-        self.session = ort.InferenceSession(model_path, providers=["CPUExecutionProvider"])
+        self.session = make_session(model_path)
         inp = self.session.get_inputs()[0]
         self.input_name = inp.name        # "images"
         self.input_size = inp.shape[2]    # 640, read from the file instead of hard-coding

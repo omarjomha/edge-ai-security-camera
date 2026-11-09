@@ -3,8 +3,9 @@
 Quick-check tools for this module live in scripts/face_check.py."""
 import cv2
 import numpy as np
-import onnxruntime as ort
 from insightface.model_zoo import get_model
+
+from src.runtime import PROVIDERS, make_session, session_options
 
 
 class FaceDetector:
@@ -13,7 +14,7 @@ class FaceDetector:
 
     def __init__(self, model_path: str, conf: float = 0.5, input_size: int = 640):
         # Local file only: get_model never downloads unless passed download=True
-        self.model = get_model(model_path, providers=["CPUExecutionProvider"])
+        self.model = get_model(model_path, providers=PROVIDERS, sess_options=session_options())
         # Fixed input size (letterboxed internally, like YOLO); ctx_id=-1 means CPU
         self.model.prepare(ctx_id=-1, input_size=(input_size, input_size), det_thresh=conf)
 
@@ -98,7 +99,7 @@ class FaceEmbedder:
     src/detector.py, so the backend can be swapped for TensorRT on the Orin."""
 
     def __init__(self, model_path: str):
-        self.session = ort.InferenceSession(model_path, providers=["CPUExecutionProvider"])
+        self.session = make_session(model_path)
         self.input_name = self.session.get_inputs()[0].name  # "input.1"
 
     def embed(self, aligned_bgr: np.ndarray) -> np.ndarray:

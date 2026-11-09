@@ -202,8 +202,12 @@ def main() -> None:
     from_file = is_file(source)
     start = time.perf_counter()
     cap = connect(source, cfg, start)
+    fullscreen = not args.no_show and cfg.get("display_fullscreen")
+    if fullscreen:
+        cv2.namedWindow("friend vs foe", cv2.WINDOW_NORMAL)   # resizable: can be scaled
 
     frames, detect_total, face_total, recog_total = 0, 0.0, 0.0, 0.0
+    writer = None                           # stream_out encoder, opened on the first frame
     fps = 0.0
     while True:
         loop_start = time.perf_counter()
@@ -244,16 +248,32 @@ def main() -> None:
         loop_fps = 1.0 / (time.perf_counter() - loop_start)
         fps = loop_fps if frames == 1 else 0.9 * fps + 0.1 * loop_fps
 
-        if not args.no_show:
+        if not args.no_show or cfg.get("stream_out"):
             vis = draw_frame(frame, out, sm, now)
             cv2.putText(vis, f"{fps:.1f} fps | detect {detect_ms:.0f} | face {face_ms:.0f} | "
                         f"recog {recog_ms:.0f} ms ({device_name()}, {backend_label()})", (10, 25),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 255), 2)
+        if cfg.get("stream_out"):
+            # Send the annotated view to other services (e.g. the hub's live view). Opened on
+            # the first frame because the encoder needs the frame size.
+            if writer is None:
+                writer = cv2.VideoWriter(cfg["stream_out"], cv2.CAP_GSTREAMER, 0,
+                                         cfg.get("stream_out_fps", 15), (vis.shape[1], vis.shape[0]))
+                if not writer.isOpened():
+                    raise RuntimeError(f"could not open stream_out: {cfg['stream_out']!r}")
+            writer.write(vis)
+        if not args.no_show:
             cv2.imshow("friend vs foe", vis)
+            if fullscreen and frames == 1:
+                # Scale to the whole screen, above other full-screen windows (e.g. the hub's
+                # kiosk on the Orin). Some window managers ignore this before the first frame.
+                cv2.setWindowProperty("friend vs foe", cv2.WND_PROP_FULLSCREEN, cv2.WINDOW_FULLSCREEN)
             if cv2.waitKey(1) & 0xFF == ord("q"):  # waitKey also lets the window redraw
                 break
 
     cap.release()
+    if writer is not None:
+        writer.release()
     cv2.destroyAllWindows()
 
     if frames:

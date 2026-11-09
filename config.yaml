@@ -1,5 +1,8 @@
 source: 0                        # webcam index | video path | rtsp:// URL | GStreamer pipeline
 vision_state_file: ""                    # e.g. ~/homieos/data/vision_state.json: publish decisions for the hub ("" = off)
+display_fullscreen: false                # true: video window fills the screen (e.g. Orin HDMI display)
+stream_out: ""                           # GStreamer pipeline to send the annotated view, e.g. to the hub ("" = off)
+stream_out_fps: 15
 rtsp_transport: tcp                      # tcp: clean frames over Wi-Fi; udp: lower delay, smeared losses
 stream_timeout_s: 5                      # give up on a silent stream after this, then reconnect
 reconnect_delay_s: 2                     # wait between reconnect attempts

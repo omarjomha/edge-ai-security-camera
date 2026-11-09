@@ -17,4 +17,4 @@ min_face_px: 40                  # skip faces too small to trust
 vote_window: 10                          # recent face results remembered per track
 vote_min_matches: 5                      # friend votes in the window to call a track FRIEND
 similarity_threshold: 0.40       # placeholder: set from threshold sweep
-grace_period_s: 5.0              # no friend match within this → INTRUDER
+grace_period_s: 3.0              # no friend match within this → INTRUDER

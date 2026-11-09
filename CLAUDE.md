@@ -102,11 +102,12 @@ edge-ai-security-camera/
 │   ├── detector.py      # YOLO wrapper
 │   ├── face.py          # image -> embedding: face detect, align, embed
 │   ├── gallery.py       # vectors only: templates, save/load, match (no models)
+│   ├── enrollment.py    # photos in memory -> quality checks -> template (runs on device)
 │   ├── tracker.py       # tracking + per-track voting
 │   ├── state_machine.py # event logic
 │   └── main.py          # capture loop, visualization
 ├── scripts/
-│   ├── enroll.py        # enrollment: data/enroll/<name>/ photos -> gallery
+│   ├── enroll.py        # dev wrapper: data/enroll/<name>/ folders -> src/enrollment.py -> gallery
 │   ├── detector_check.py # dev: YOLO on one still image
 │   ├── face_check.py    # dev: faces + aligned crops on one image, or similarity table
 │   ├── export_onnx.py

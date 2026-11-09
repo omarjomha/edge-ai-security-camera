@@ -1,47 +1,21 @@
-"""Enroll friends: data/enroll/<name>/ photos -> gallery/gallery.npz.
+"""Dev enrollment: data/enroll/<name>/ photos -> gallery/gallery.npz.
 
 Usage: python -m scripts.enroll
+The enrollment logic is in src/enrollment.py; this script only reads folders,
+prints the report and saves. Rebuilds the whole gallery from the photos each run.
 """
 import argparse
 import os
 
 import cv2
-import numpy as np
 import yaml
 
-from src.face import FaceDetector, FaceEmbedder, align_face
-from src.gallery import cosine_similarity, make_template, save_gallery
+from src.enrollment import enroll_person
+from src.face import FaceDetector, FaceEmbedder
+from src.gallery import save_gallery
 
 ENROLL_DIR = "data/enroll"   # gitignored: one subfolder of photos per friend
 IMAGE_EXTS = (".jpg", ".jpeg", ".png")
-OUTLIER_SCORE = 0.5          # photo this far from its own template is probably bad
-
-
-def embed_largest_face(face_det: FaceDetector, embedder: FaceEmbedder,
-                       img: np.ndarray) -> np.ndarray | None:
-    """Photo -> embedding of its biggest face (ignores people in the background).
-    Returns None if no face is found. Enrollment photos = one main person each."""
-    boxes, landmarks = face_det.detect(img)
-    if len(boxes) == 0:
-        return None
-    areas = (boxes[:, 2] - boxes[:, 0]) * (boxes[:, 3] - boxes[:, 1])
-    return embedder.embed(align_face(img, landmarks[int(areas.argmax())]))
-
-
-def embed_folder(face_det: FaceDetector, embedder: FaceEmbedder,
-                 folder: str) -> tuple[list[str], list[np.ndarray]]:
-    """Every photo in one friend's folder -> (filenames, embeddings)."""
-    names, vecs = [], []
-    for fname in sorted(os.listdir(folder)):
-        if not fname.lower().endswith(IMAGE_EXTS):
-            continue
-        vec = embed_largest_face(face_det, embedder, cv2.imread(os.path.join(folder, fname)))
-        if vec is None:
-            print(f"  no face found in {fname}, skipping")
-            continue
-        names.append(fname)
-        vecs.append(vec)
-    return names, vecs
 
 
 def main() -> None:
@@ -59,18 +33,22 @@ def main() -> None:
         folder = os.path.join(ENROLL_DIR, name)
         if not os.path.isdir(folder):
             continue
-        fnames, vecs = embed_folder(face_det, embedder, folder)
-        if not vecs:
-            print(f"{name}: no usable faces, not enrolled")
-            continue
-        gallery[name] = make_template(vecs)
+        photos = [(f, cv2.imread(os.path.join(folder, f)))
+                  for f in sorted(os.listdir(folder)) if f.lower().endswith(IMAGE_EXTS)]
+        template, results = enroll_person(face_det, embedder, photos,
+                                          min_face_px=cfg["min_face_px"],
+                                          min_photos=cfg["enroll_min_photos"],
+                                          outlier_score=cfg["enroll_outlier_score"])
 
-        # Quality report: how well each photo agrees with the template
-        print(f"{name}: {len(vecs)} photos")
-        for fname, vec in zip(fnames, vecs):
-            score = cosine_similarity(vec, gallery[name])
-            flag = "  <-- outlier? check this photo" if score < OUTLIER_SCORE else ""
-            print(f"  {fname:<20} similarity to template {score:.2f}{flag}")
+        n_ok = sum(r.accepted for r in results)
+        status = "ENROLLED" if template is not None else "NOT ENROLLED"
+        print(f"{name}: {status} ({n_ok}/{len(results)} photos used, "
+              f"need {cfg['enroll_min_photos']})")
+        for r in results:
+            score = f"{r.score:.2f}" if r.score is not None else "  - "
+            print(f"  {r.photo_id:<20} {score}  {'ok' if r.accepted else 'REJECTED: ' + r.reason}")
+        if template is not None:
+            gallery[name] = template
 
     save_gallery(cfg["gallery_path"], gallery)
     print(f"saved {len(gallery)} friend(s) to {cfg['gallery_path']}")

@@ -9,9 +9,18 @@ import os
 import cv2
 import numpy as np
 
-from scripts.enroll import embed_largest_face
 from src.face import ALIGNED_SIZE, FaceDetector, FaceEmbedder, align_face, draw_faces
 from src.gallery import cosine_similarity
+
+
+def embed_largest_face(face_det: FaceDetector, embedder: FaceEmbedder,
+                       img: np.ndarray) -> np.ndarray | None:
+    """Photo -> embedding of its biggest face (ignores people in the background)."""
+    boxes, landmarks = face_det.detect(img)
+    if len(boxes) == 0:
+        return None
+    areas = (boxes[:, 2] - boxes[:, 0]) * (boxes[:, 3] - boxes[:, 1])
+    return embedder.embed(align_face(img, landmarks[int(areas.argmax())]))
 
 
 def show_one(face_det: FaceDetector, path: str, save: str, aligned_dir: str) -> None:

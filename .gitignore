@@ -12,3 +12,10 @@ __pycache__/
 
 # Ultralytics output
 runs/
+
+# Images in results/ show faces (personal data): keep local, never commit.
+# Charts without faces go in results/plots/ and stay tracked.
+results/**/*.jpg
+results/**/*.jpeg
+results/**/*.png
+!results/plots/**/*.png
